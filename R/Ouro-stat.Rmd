@@ -1,0 +1,910 @@
+---
+title: "Ouro-stat"
+author: "Norbert Moldovan"
+date: "2025-04-17"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libs}
+# Load libraries.
+library(dplyr)
+library(tidyr)
+library(stringr)
+```
+
+```{r project_path}
+# Set the path to the project folder
+projPath <- "~/Documents/Ouroseq/Seq_runs/"
+```
+
+## Statistics of (manuscript reference)
+
+
+```{r The_Ouro-seq_protocol}
+rlDf <- read.delim(paste0(projPath, "/Read_length_master.tsv"),
+                  header = TRUE)
+
+rl_sample_summary <- rlDf %>%
+  group_by(file_name) %>%
+  summarize(
+    mean_read_length = weighted.mean(read_length, count),
+    weighted_var = sum(count * (read_length - weighted.mean(read_length, count))^2) / sum(count),
+    sd_read_length = sqrt(weighted_var),
+    .groups = 'drop'
+  )
+
+rl_libPrep_summary <- rlDf %>%
+  group_by(sample_type,lib_prep) %>%
+  summarize(
+    mean_read_length = weighted.mean(read_length, count),
+    weighted_var = sum(count * (read_length - weighted.mean(read_length, count))^2) / sum(count),
+    sd_read_length = sqrt(weighted_var),
+    .groups = 'drop'
+  )
+```
+
+```{r Ouro-seq_improves_full-length_circRNA_recovery}
+# Load circRNA type data
+circTypeDf <- read.delim(paste0(projPath, "/circRNA_type_master.tsv"),
+                        header = TRUE)
+
+efficacy_libPrep_summary <- circTypeDf %>%
+  group_by(sample_type,lib_prep) %>%
+  summarize(
+    mean_change = mean(prop_Splice_signal),
+    sd_change = sd(prop_Splice_signal),
+    .groups = 'drop'
+  )
+```
+
+```{r Ouro-seq_uncovers_circRNA_complexity}
+# Load circRNA data
+circRNADf <- read.delim(paste0(projPath, "/circRNA_master.tsv"),
+                        header = TRUE)
+
+# Normalize circ_type naming for intergenic variants
+circRNADf <- circRNADf %>%
+  mutate(circ_type = dplyr::recode(circ_type,
+                                   intergenic_iso1 = "intergenic",
+                                   intergenic_iso2 = "intergenic"))
+
+# Summarize unique circRNAs by sample type, circ type, and lib_prep
+circRNA_type_by_group <- circRNADf %>%
+  # Standardize the order of semicolon-separated values
+  mutate(
+    sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
+    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";"))
+  ) %>%
+  # Group by sample type, circ type, and lib_prep to count unique circ_ids
+  group_by(sample_type, circ_type, lib_prep) %>%
+  summarise(
+    unique_circs = n_distinct(circ_id),
+    .groups = 'drop'
+  ) %>%
+  # Remove empty rows
+  filter(sample_type != "" & !is.na(circ_type) & lib_prep != "")
+
+# Read circAtlas3
+circAtlasDf <- read.table("~/Documents/Ouroseq/CircAtlas3/human_bed_v3.0.bed",
+                          sep = "\t",
+                          header = FALSE)
+
+colnames(circAtlasDf) <- c("chromosome", "start", "end", "circName", "x", "strand")
+
+# Define wiggle parameter for coordinate matching
+wiggle <- 5  # Can be adjusted as needed
+
+# Get unique circRNAs from circRNADf for circAtlas matching
+unique_circRNAs <- circRNADf %>%
+  distinct(circ_id, chr, start, end, strand, circ_type, lib_prep, .keep_all = TRUE)
+
+# Create a new column to store circAtlas IDs
+unique_circRNAs$circAtlas_id <- NA
+
+# Use a more efficient approach with vectorized operations
+for (i in 1:nrow(unique_circRNAs)) {
+  # Filter potential matches by chromosome and strand first
+  chr_matches <- circAtlasDf$chromosome == unique_circRNAs$chr[i]
+  strand_matches <- circAtlasDf$strand == unique_circRNAs$strand[i]
+  
+  # Only proceed if there are potential matches
+  if (any(chr_matches & strand_matches)) {
+    # Get indices of chromosome and strand matches
+    potential_matches <- which(chr_matches & strand_matches)
+    
+    # Get coordinates
+    start1 <- unique_circRNAs$start[i]
+    end1 <- unique_circRNAs$end[i]
+    
+    # Check if both start and end coordinates match within wiggle range
+    start_matches <- abs(circAtlasDf$start[potential_matches] - start1) <= wiggle
+    end_matches <- abs(circAtlasDf$end[potential_matches] - end1) <= wiggle
+    
+    # Find actual matches where both start and end coordinates match
+    matches <- potential_matches[start_matches & end_matches]
+    
+    if (length(matches) > 0) {
+      # If multiple matches, concatenate all circAtlas IDs
+      unique_circRNAs$circAtlas_id[i] <- paste(circAtlasDf$circName[matches], collapse = ";")
+    }
+  }
+}
+
+write.table(unique_circRNAs, 
+            file = paste0(projPath, "/InCircAtlas.tsv"), 
+            sep = "\t", 
+            row.names = FALSE,
+            quote = FALSE)
+
+# Create a list of circ_ids for each sample type, lib_prep, and circAtlas
+sample_type_circs <- circRNADf %>%
+  mutate(
+    sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
+    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";"))
+  ) %>%
+  filter(sample_type != "" & lib_prep != "") %>%
+  group_by(sample_type, lib_prep) %>%
+  summarise(
+    circ_ids = list(unique(circ_id)),
+    .groups = 'drop'
+  )
+
+# Add circAtlas to the list
+circAtlas_circs <- unique_circRNAs %>%
+  filter(!is.na(circAtlas_id)) %>%
+  group_by(lib_prep) %>%
+  summarise(
+    sample_type = "CircAtlas",
+    circ_ids = list(unique(circ_id)),
+    .groups = 'drop'
+  )
+
+sample_type_circs <- bind_rows(sample_type_circs, circAtlas_circs)
+
+# Create overlap matrix for each lib_prep
+lib_preps <- unique(sample_type_circs$lib_prep)
+overlap_matrices <- list()
+
+for (prep in lib_preps) {
+  # Get sample types for this lib_prep
+  prep_sample_types <- unique(sample_type_circs$sample_type[sample_type_circs$lib_prep == prep])
+  
+  # Create matrix for this lib_prep
+  prep_matrix <- matrix(0, nrow = length(prep_sample_types), ncol = length(prep_sample_types))
+  rownames(prep_matrix) <- prep_sample_types
+  colnames(prep_matrix) <- prep_sample_types
+  
+  # Fill the matrix with overlap counts
+  for (i in 1:length(prep_sample_types)) {
+    for (j in 1:length(prep_sample_types)) {
+      if (i <= j) {  # Only fill upper triangle to avoid duplicates
+        circs_i <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[i] & 
+                                             sample_type_circs$lib_prep == prep][[1]]
+        circs_j <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[j] & 
+                                             sample_type_circs$lib_prep == prep][[1]]
+        prep_matrix[i, j] <- length(intersect(circs_i, circs_j))
+        prep_matrix[j, i] <- prep_matrix[i, j]  # Make matrix symmetric
+      }
+    }
+  }
+  
+  overlap_matrices[[prep]] <- prep_matrix
+}
+
+# Add circAtlas overlap information to circRNA_type_by_group
+circRNA_type_by_group <- circRNA_type_by_group %>%
+  bind_rows(
+    unique_circRNAs %>%
+      filter(!is.na(circAtlas_id)) %>%
+      group_by(circ_type, lib_prep) %>%
+      summarise(
+        sample_type = "CircAtlas",
+        unique_circs = n_distinct(circ_id),
+        .groups = 'drop'
+      )
+  )
+
+# Print results
+print("Unique circRNAs by sample type, circ type, and lib_prep (including CircAtlas):")
+print(circRNA_type_by_group)
+
+print("\nOverlap matrices between sample types and CircAtlas for each lib_prep:")
+for (prep in names(overlap_matrices)) {
+  cat("\nOverlap matrix for", prep, ":\n")
+  print(overlap_matrices[[prep]])
+}
+
+# Count circRNAs with and without circAtlas matches
+circAtlas_overlap_summary <- circRNADf %>%
+  # Join with unique_circRNAs to get circAtlas_id information
+  left_join(
+    unique_circRNAs %>% select(circ_id, circAtlas_id),
+    by = "circ_id"
+  ) %>%
+  mutate(
+    has_circAtlas_match = !is.na(circAtlas_id)
+  ) %>%
+  group_by(sample_type) %>%
+  summarise(
+    total_circs = n_distinct(circ_id),  # Count unique circRNAs
+    circs_in_circAtlas = n_distinct(circ_id[has_circAtlas_match]),  # Count unique circRNAs in circAtlas
+    circs_not_in_circAtlas = n_distinct(circ_id[!has_circAtlas_match]),  # Count unique circRNAs not in circAtlas
+    percent_in_circAtlas = round(100 * n_distinct(circ_id[has_circAtlas_match]) / n_distinct(circ_id), 2),
+    .groups = 'drop'
+  ) %>%
+  filter(sample_type != "")
+
+# Print the summary
+print("CircAtlas overlap summary:")
+print(circAtlas_overlap_summary)
+
+# Summarize circRNA types with circAtlas overlap information
+circRNA_type_with_atlas <- circRNADf %>%
+  # Join with unique_circRNAs to get circAtlas_id information
+  left_join(
+    unique_circRNAs %>% select(circ_id, circAtlas_id),
+    by = "circ_id"
+  ) %>%
+  # Standardize the order of semicolon-separated values
+  mutate(
+    sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
+    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";")),
+    has_circAtlas_match = !is.na(circAtlas_id)
+  ) %>%
+  # Group by the standardized strings, lib_prep, and circAtlas match status
+  group_by(sample_type, lib_prep, has_circAtlas_match) %>%
+  summarise(
+    total_circs = n_distinct(circ_id),  # Count unique circRNAs
+    exonic = n_distinct(circ_id[circ_type == "exon"]),
+    intronic = n_distinct(circ_id[circ_type == "intron"]),
+    intergenic = n_distinct(circ_id[circ_type == "intergenic"]),
+    antisense = n_distinct(circ_id[circ_type == "antisense"]),
+    unknown = n_distinct(circ_id[circ_type == "Unknown"]),
+    exonic_pct = round(100 * n_distinct(circ_id[circ_type == "exon"]) / n_distinct(circ_id), 2),
+    intronic_pct = round(100 * n_distinct(circ_id[circ_type == "intron"]) / n_distinct(circ_id), 2),
+    intergenic_pct = round(100 * n_distinct(circ_id[circ_type == "intergenic"]) / n_distinct(circ_id), 2),
+    antisense_pct = round(100 * n_distinct(circ_id[circ_type == "antisense"]) / n_distinct(circ_id), 2),
+    unknown_pct = round(100 * n_distinct(circ_id[circ_type == "Unknown"]) / n_distinct(circ_id), 2),
+    .groups = 'drop'
+  ) %>%
+  # Remove empty rows
+  filter(sample_type != "" & lib_prep != "")
+
+# Print the summary
+print("CircRNA types with circAtlas overlap information (by lib_prep):")
+print(circRNA_type_with_atlas)
+
+# Calculate overlaps between lib_preps
+lib_prep_overlaps <- circRNADf %>%
+  # Get unique circRNAs for each lib_prep
+  group_by(lib_prep) %>%
+  summarise(
+    circ_ids = list(unique(circ_id)),
+    .groups = 'drop'
+  )
+
+# Create overlap matrix for lib_preps
+lib_preps <- unique(lib_prep_overlaps$lib_prep)
+lib_prep_matrix <- matrix(0, nrow = length(lib_preps), ncol = length(lib_preps))
+rownames(lib_prep_matrix) <- lib_preps
+colnames(lib_prep_matrix) <- lib_preps
+
+# Fill the matrix with overlap counts
+for (i in 1:length(lib_preps)) {
+  for (j in 1:length(lib_preps)) {
+    if (i <= j) {  # Only fill upper triangle to avoid duplicates
+      circs_i <- lib_prep_overlaps$circ_ids[lib_prep_overlaps$lib_prep == lib_preps[i]][[1]]
+      circs_j <- lib_prep_overlaps$circ_ids[lib_prep_overlaps$lib_prep == lib_preps[j]][[1]]
+      lib_prep_matrix[i, j] <- length(intersect(circs_i, circs_j))
+      lib_prep_matrix[j, i] <- lib_prep_matrix[i, j]  # Make matrix symmetric
+    }
+  }
+}
+
+# Calculate overlap percentages
+lib_prep_percentages <- matrix(0, nrow = length(lib_preps), ncol = length(lib_preps))
+rownames(lib_prep_percentages) <- lib_preps
+colnames(lib_prep_percentages) <- lib_preps
+
+for (i in 1:length(lib_preps)) {
+  for (j in 1:length(lib_preps)) {
+    if (i != j) {  # Don't calculate percentage for same lib_prep
+      total_i <- length(lib_prep_overlaps$circ_ids[lib_prep_overlaps$lib_prep == lib_preps[i]][[1]])
+      lib_prep_percentages[i, j] <- round(100 * lib_prep_matrix[i, j] / total_i, 2)
+    }
+  }
+}
+
+# Print results
+print("\nOverlap matrix between lib_preps (number of shared circRNAs):")
+print(lib_prep_matrix)
+
+print("\nPercentage of circRNAs from each lib_prep that are shared with other lib_preps:")
+print(lib_prep_percentages)
+
+# Create summary table for circRNA sizes by type
+circRNA_size_summary <- circRNADf[circRNADf$lib_prep == "Ouro-prep",] %>%
+  # Select only the relevant columns and get unique circRNAs
+  distinct(circ_id, circ_type, circ_len) %>%
+  # Group by circRNA type
+  group_by(circ_type) %>%
+  # Calculate summary statistics
+  summarise(
+    count = n(),
+    mean_size = mean(circ_len, na.rm = TRUE),
+    median_size = median(circ_len, na.rm = TRUE),
+    sd_size = sd(circ_len, na.rm = TRUE),
+    min_size = min(circ_len, na.rm = TRUE),
+    max_size = max(circ_len, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  # Sort by mean size
+  arrange(desc(mean_size))
+
+# Print the summary table
+print("\nSummary of circRNA sizes by type:")
+print(circRNA_size_summary)
+
+# Create summary table for alternative circularization events, alternative splicing, and readthrough circRNAs
+
+# First, get unique circRNAs to avoid counting duplicates
+unique_circRNAs <- circRNADf %>%
+  distinct(circ_id, isoform, gene_id, sample_type, lib_prep, chr, start, end)
+
+# Group by chromosome and start to detect alternative end positions
+unique_circRNAs <- unique_circRNAs %>%
+  group_by(chr, start) %>%
+  mutate(alt_end = n_distinct(end) > 1) %>%
+  ungroup() %>%
+  # Group by chromosome and end to detect alternative start positions
+  group_by(chr, end) %>%
+  mutate(alt_start = n_distinct(start) > 1) %>%
+  ungroup()
+
+# Function to check for alternative splicing
+has_alt_splicing <- function(isoform_str) {
+  if (!grepl("\\|", isoform_str)) {
+    return(FALSE)
+  }
+  
+  isoforms <- strsplit(isoform_str, "\\|")[[1]]
+  
+  # Extract start and end positions from each isoform
+  starts <- sapply(isoforms, function(iso) {
+    exons <- strsplit(iso, ",")[[1]]
+    first_exon <- strsplit(exons[1], "-")[[1]]
+    return(as.numeric(first_exon[1]))
+  })
+  
+  ends <- sapply(isoforms, function(iso) {
+    exons <- strsplit(iso, ",")[[1]]
+    last_exon <- strsplit(exons[length(exons)], "-")[[1]]
+    return(as.numeric(last_exon[2]))
+  })
+  
+  # Check if all start and end positions are the same but internal exon boundaries differ
+  if (length(unique(starts)) == 1 && length(unique(ends)) == 1) {
+    # Check if the exon structures differ
+    exon_structures <- sapply(isoforms, function(iso) iso)
+    return(length(unique(exon_structures)) > 1)
+  }
+  
+  return(FALSE)
+}
+
+# Function to check for readthrough circRNAs and count gene overlaps
+analyze_readthrough <- function(gene_id_str) {
+  if (is.na(gene_id_str)) {
+    return(list(is_readthrough = FALSE, gene_count = 0))
+  }
+  genes <- strsplit(gene_id_str, ",")[[1]]
+  gene_count <- length(genes)
+  return(list(
+    is_readthrough = gene_count > 1,
+    gene_count = gene_count
+  ))
+}
+
+# Apply the functions to identify each type of event
+unique_circRNAs <- unique_circRNAs %>%
+  mutate(
+    alt_splicing = sapply(isoform, has_alt_splicing),
+    readthrough_info = lapply(gene_id, analyze_readthrough)
+  ) %>%
+  mutate(
+    readthrough = sapply(readthrough_info, function(x) x$is_readthrough),
+    gene_count = sapply(readthrough_info, function(x) x$gene_count)
+  ) %>%
+  select(-readthrough_info)
+
+# Standardize the order of semicolon-separated values in sample_type and lib_prep
+unique_circRNAs <- unique_circRNAs %>%
+  mutate(
+    sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
+    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";"))
+  )
+
+# Create summary table by sample_type and lib_prep
+alt_events_summary <- unique_circRNAs %>%
+  filter(sample_type != "" & lib_prep != "") %>%
+  group_by(sample_type, lib_prep) %>%
+  summarise(
+    total_unique_circs = n_distinct(circ_id),
+    alt_circularization_count = sum(alt_start | alt_end),
+    alt_circularization_percent = round(100 * sum(alt_start | alt_end) / n_distinct(circ_id), 2),
+    alt_splicing_count = sum(alt_splicing),
+    alt_splicing_percent = round(100 * sum(alt_splicing) / n_distinct(circ_id), 2),
+    readthrough_count = sum(readthrough),
+    readthrough_percent = round(100 * sum(readthrough) / n_distinct(circ_id), 2),
+    .groups = 'drop'
+  ) %>%
+  arrange(lib_prep, sample_type)
+
+# Create summary of readthrough circRNAs by gene count
+readthrough_gene_summary <- unique_circRNAs %>%
+  filter(readthrough) %>%
+  group_by(sample_type, lib_prep) %>%
+  summarise(
+    total_readthrough = n_distinct(circ_id),
+    two_genes = sum(gene_count == 2),
+    three_genes = sum(gene_count == 3),
+    more_than_three = sum(gene_count > 3),
+    max_genes = max(gene_count),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    two_genes_pct = round(100 * two_genes / total_readthrough, 2),
+    three_genes_pct = round(100 * three_genes / total_readthrough, 2),
+    more_than_three_pct = round(100 * more_than_three / total_readthrough, 2)
+  ) %>%
+  arrange(lib_prep, sample_type)
+
+# Print the summaries
+print("\nSummary of alternative events:")
+print(alt_events_summary)
+
+print("\nSummary of readthrough circRNAs by gene count:")
+print(readthrough_gene_summary)
+
+# Create a visualization of the readthrough gene counts
+readthrough_gene_long <- readthrough_gene_summary %>%
+  pivot_longer(
+    cols = c(two_genes_pct, three_genes_pct, more_than_three_pct),
+    names_to = "gene_count",
+    values_to = "percentage"
+  ) %>%
+  mutate(
+    gene_count = case_when(
+      gene_count == "two_genes_pct" ~ "2 Genes",
+      gene_count == "three_genes_pct" ~ "3 Genes",
+      gene_count == "more_than_three_pct" ~ ">3 Genes"
+    )
+  )
+
+ggplot(readthrough_gene_long, aes(x = sample_type, y = percentage, fill = gene_count)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~lib_prep, scales = "free_x") +
+  labs(
+    title = "Distribution of Readthrough circRNAs by Number of Overlapping Genes",
+    x = "Sample Type",
+    y = "Percentage (%)",
+    fill = "Number of Genes"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom"
+  )
+
+```
+
+```{r Functional_analysis_of_circRNA}
+
+# Load miRNA interactions data
+mirDf <- read.delim(paste0(projPath, "/miRNA_interaction_master.tsv"),
+                    header = TRUE)
+mirDf <- mirDf[mirDf$lib_prep == "Ouro-prep",]
+
+# Get unique miRNA binding sites (by circ_id and ID)
+unique_mir_sites <- mirDf %>%
+  distinct(circ_id, ID, .keep_all = TRUE)
+
+# Calculate miRNA binding site statistics based on unique sites
+total_binding_sites <- nrow(unique_mir_sites)
+
+# Count sites with software_matche = 3
+software_match_3 <- sum(unique_mir_sites$software_matche == 3)
+
+# Count sites with Validated = Yes
+validated_yes <- sum(unique_mir_sites$Validated == "Yes")
+
+# Count sites with AGO = Yes
+ago_yes <- sum(unique_mir_sites$AGO == "Yes")
+
+# Count high-confidence sites (Validated = Yes OR software_matche = 3 OR (software_matche = 2 AND AGO = Yes))
+high_confidence_sites <- sum(
+  unique_mir_sites$Validated == "Yes" | 
+  unique_mir_sites$software_matche == 3 | 
+  (unique_mir_sites$software_matche == 2 & unique_mir_sites$AGO == "Yes")
+)
+
+# Count unique circRNAs with high-confidence sites
+high_confidence_circs <- unique_mir_sites %>%
+  filter(
+    Validated == "Yes" | 
+    software_matche == 3 | 
+    (software_matche == 2 & AGO == "Yes")
+  ) %>%
+  distinct(circ_id) %>%
+  nrow()
+
+high_confidence_mirna <- unique_mir_sites %>%
+  filter(
+    Validated == "Yes" | 
+    software_matche == 3 | 
+    (software_matche == 2 & AGO == "Yes")
+  ) %>%
+  distinct(mirna_name) %>%
+  nrow()
+
+# Create summary table for miRNA binding statistics
+mirna_summary <- data.frame(
+  Metric = c(
+    "Total unique miRNA binding sites",
+    "Unique binding sites with software match = 3",
+    "Unique binding sites with experimental validation",
+    "Unique binding sites with AGO support",
+    "High-confidence unique binding sites",
+    "Unique miRNAs with high-confidence binding sites",
+    "Unique circRNAs with high-confidence binding sites"
+  ),
+  Value = c(
+    total_binding_sites,
+    software_match_3,
+    validated_yes,
+    ago_yes,
+    high_confidence_sites,
+    high_confidence_mirna,
+    high_confidence_circs
+  )
+)
+
+# Display miRNA binding statistics
+print("miRNA binding site statistics (unique by circ_id and mirna_name):")
+print(mirna_summary)
+
+# Subset for high confidence interactions.
+mir_hcDf <- mirDf[mirDf$lib_prep == "Ouro-prep" &
+                  mirDf$software_matche == 3 |
+                  (mirDf$software_matche == 2 &
+                   mirDf$Validated == "Yes") |
+                  (mirDf$software_matche == 2 & 
+                   mirDf$AGO == "Yes"),]
+
+# Create a summary table of miRNA interactions per circRNA and seed type
+mirSeed_hc_summary <- mir_hcDf %>%
+  distinct(circ_id, ID, .keep_all = TRUE) %>%
+  group_by(circ_id, seed_type) %>%
+  summarize(interaction_count = n()) %>%
+  arrange(desc(interaction_count))
+
+mirSeed_hc_summary <- merge(mirSeed_hc_summary,
+                        circRNADf[,c("circ_id",
+                                     "circ_type",
+                                     "circ_len")],
+                        by = "circ_id")
+
+mirSeed_hc_summary$normalized_interaction_count <- mirSeed_hc_summary$interaction_count/(mirSeed_hc_summary$circ_len/1000)
+
+# Calculate proportion of each seed type across all circRNAs
+seed_type_proportions <- mirSeed_hc_summary %>%
+  group_by(seed_type) %>%
+  summarise(
+    total_interactions = sum(interaction_count),
+    unique_circs = n_distinct(circ_id)
+  ) %>%
+  mutate(
+    proportion_of_interactions = total_interactions / sum(total_interactions),
+    proportion_of_circs = unique_circs / n_distinct(mirSeed_hc_summary$circ_id)
+  ) %>%
+  arrange(desc(proportion_of_interactions))
+
+# Calculate proportion of seed types per circRNA type
+seed_type_by_circ_type <- mirSeed_hc_summary %>%
+  group_by(circ_type, seed_type) %>%
+  summarise(
+    total_interactions = sum(interaction_count),
+    unique_circs = n_distinct(circ_id)
+  ) %>%
+  group_by(circ_type) %>%
+  mutate(
+    proportion_of_interactions = total_interactions / sum(total_interactions),
+    proportion_of_circs = unique_circs / n_distinct(mirSeed_hc_summary$circ_id[mirSeed_hc_summary$circ_type == first(circ_type)])
+  ) %>%
+  arrange(circ_type, desc(proportion_of_interactions))
+
+# Print the results
+print("Proportion of seed types across all circRNAs:")
+print(seed_type_proportions)
+
+print("\nProportion of seed types by circRNA type:")
+print(seed_type_by_circ_type)
+
+# Create visualizations
+# Bar plot of seed type proportions
+ggplot(seed_type_proportions, aes(x = reorder(seed_type, -proportion_of_interactions), y = proportion_of_interactions)) +
+  geom_bar(stat = "identity") +
+  labs(
+    title = "Proportion of miRNA Seed Types",
+    x = "Seed Type",
+    y = "Proportion of Interactions"
+  ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Stacked bar plot of seed type proportions by circRNA type
+ggplot(seed_type_by_circ_type, aes(x = circ_type, y = proportion_of_interactions, fill = seed_type)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(
+    title = "Proportion of miRNA Seed Types by circRNA Type",
+    x = "circRNA Type",
+    y = "Proportion of Interactions",
+    fill = "Seed Type"
+  ) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# Coding potential
+# Load coding potential data
+cpc2Df <- read.delim(paste0(projPath, "CPC2_master.tsv"),
+                     header = TRUE)
+cpc2Df <- cpc2Df[cpc2Df$circ_id %in% circRNADf$circ_id,]
+
+
+# Prepare unique circRNA entries from CPC2 with coding status
+cpc2_unique <- cpc2Df[cpc2Df$lib_prep == "Ouro-prep",] %>%
+  distinct(circ_id, .keep_all = TRUE)
+
+coding_count <- length(cpc2_unique[cpc2_unique$label == "coding",]$circ_id)
+print(paste("Number of 'coding' circRNA:", coding_count))
+
+
+# Count coding/noncoding per type (ensure missing combos appear as zero)
+counts <- cpc2_unique %>%
+  mutate(circ_type = factor(circ_type, levels = lvl, labels = lab)) %>%
+  count(circ_type, label, name = "n") %>%
+  tidyr::complete(circ_type, label = c("coding", "noncoding"), fill = list(n = 0))
+
+# Build two-line x-axis labels with coding/total counts
+totals <- counts %>%
+  group_by(circ_type) %>%
+  summarise(coding = sum(n[label == "coding"]),
+            total = sum(n[label == "coding"]) + sum(n[label == "noncoding"]),
+            prop = sum(n[label == "coding"])/(sum(n[label == "coding"]) + sum(n[label == "noncoding"])))
+
+###==========================================###
+
+# Load IRES data
+iresDf <- read.delim(paste0(projPath, "/IRES_master.tsv"),
+                     header = TRUE)
+
+# Normalize circ_type naming for intergenic variants
+iresDf <- iresDf %>%
+  mutate(circ_type = dplyr::recode(circ_type,
+                                   intergenic_iso1 = "intergenic",
+                                   intergenic_iso2 = "intergenic",
+                                   exon_iso1 = "exon",
+                                   exon_iso2 = "exon"))
+
+# Count unique ORFs for coding circRNA
+unique_ires <- iresDf[iresDf$type == "IRES" & 
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  distinct(circ_id, start, end) %>%
+  nrow()
+
+cat("\nTotal number of unique IRES:", unique_ires, "\n")
+
+# Count unique ORF regions
+unique_ires_like <- iresDf[iresDf$type == "IRES-like"& 
+                           iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  distinct(circ_id, start, end) %>%
+  nrow()
+
+cat("\nTotal number of unique IRES-like:", unique_ires_like, "\n")
+
+
+# Count of uniqe circRNA with an IRES detected with DeepORES
+# Count unique circRNAs with IRES
+ires_circs <- iresDf[iresDf$lib_prep == "Ouro-prep"& 
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES") %>%
+  distinct(circ_id) %>%
+  nrow()
+
+# Count unique circRNAs with IRES-like elements
+ires_like_circs <- iresDf[iresDf$lib_prep == "Ouro-prep" & 
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES-like") %>%
+  distinct(circ_id) %>%
+  nrow()
+
+# Calculate average distance and SD of IRES from start codon
+ires_distance_stats <- iresDf[iresDf$lib_prep == "Ouro-prep"& 
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES") %>%
+  summarise(
+    avg_distance = mean(distance_to_orf, na.rm = TRUE),
+    sd_distance = sd(distance_to_orf, na.rm = TRUE)
+  )
+
+# Calculate average distance and SD of IRES-like elements from start codon
+ires_like_distance_stats <- iresDf[iresDf$lib_prep == "Ouro-prep"& 
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES-like") %>%
+  summarise(
+    avg_distance = mean(distance_to_orf, na.rm = TRUE),
+    sd_distance = sd(distance_to_orf, na.rm = TRUE)
+  )
+
+# Count and proportion of each circ_type harboring an IRES
+circ_type_ires <- iresDf[iresDf$lib_prep == "Ouro-prep" &
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES") %>%
+  distinct(circ_id, circ_type) %>%
+  count(circ_type, name = "count") %>%
+  left_join(
+    circRNADf %>%
+      filter(lib_prep == "Ouro-prep",
+             circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id) %>%
+      distinct(circ_id, circ_type) %>%
+      count(circ_type, name = "total"),
+    by = "circ_type"
+  ) %>%
+  mutate(proportion = count / total)
+
+# Count and proportion of each circ_type harboring an IRES-like element
+circ_type_ires_like <- iresDf[iresDf$lib_prep == "Ouro-prep" &
+                      iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,] %>%
+  filter(type == "IRES-like") %>%
+  distinct(circ_id, circ_type) %>%
+  count(circ_type, name = "count") %>%
+  left_join(
+    circRNADf %>%
+      filter(lib_prep == "Ouro-prep",
+             circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id) %>%
+      distinct(circ_id, circ_type) %>%
+      count(circ_type, name = "total"),
+    by = "circ_type"
+  ) %>%
+  mutate(proportion = count / total)
+
+
+# Create summary table
+summary_table <- data.frame(
+  Metric = c(
+    "Unique circRNAs with IRES",
+    "Unique circRNAs with IRES-like elements",
+    "Average distance of IRES from start codon (bp)",
+    "SD of IRES distance from start codon (bp)",
+    "Average distance of IRES-like from start codon (bp)",
+    "SD of IRES-like distance from start codon (bp)"
+  ),
+  Value = c(
+    ires_circs,
+    ires_like_circs,
+    round(ires_distance_stats$avg_distance, 2),
+    round(ires_distance_stats$sd_distance, 2),
+    round(ires_like_distance_stats$avg_distance, 2),
+    round(ires_like_distance_stats$sd_distance, 2)
+  )
+)
+
+# Display summary table
+print(summary_table)
+
+# Display circ_type statistics for IRES
+print("CircRNA types harboring IRES:")
+print(circ_type_ires)
+
+# Display circ_type statistics for IRES-like
+print("CircRNA types harboring IRES-like elements:")
+print(circ_type_ires_like)
+
+
+ires_Ouro <- iresDf[iresDf$lib_prep == "Ouro-prep" &
+                    iresDf$circ_id %in% cpc2_unique[cpc2_unique$label == "coding",]$circ_id,]
+
+circRNA_unique <- circRNADf %>%
+  distinct(circ_id, .keep_all = TRUE)
+
+ires_density <- ires_Ouro %>%
+  group_by(circ_id, type) %>%
+  summarize(ires_count = n()) %>%
+  arrange(desc(ires_count))
+
+ires_density <- merge(ires_density,
+                      circRNA_unique[,c("circ_id",
+                                        "circ_type",
+                                        "circ_len")],
+                      by = "circ_id")
+
+ires_density$normalized_ires_count <- ires_density$ires_count/(ires_density$circ_len/1000)
+
+# Compute summary statistics for normalized IRES counts by circRNA type
+ires_density_summary <- ires_density %>%
+  group_by(circ_type, type) %>%
+  summarise(
+    mean_normalized_count = mean(normalized_ires_count, na.rm = TRUE),
+    median_normalized_count = median(normalized_ires_count, na.rm = TRUE),
+    sd_normalized_count = sd(normalized_ires_count, na.rm = TRUE),
+    n_circRNAs = n(),
+    .groups = 'drop'
+  ) %>%
+  arrange(circ_type, type)
+
+# Print the summary table
+print("Summary statistics for normalized IRES counts by circRNA type:")
+print(ires_density_summary)
+
+
+ires_cpc2 <- merge(ires_Ouro, cpc2_unique[,c("circ_id","label")],
+                   by = "circ_id")
+ires_cpc2_IRES <- ires_cpc2[ires_cpc2$lib_prep == "Ouro-prep" &
+                             ires_cpc2$type == "IRES",] %>%
+                   distinct(circ_id, .keep_all = TRUE)
+ires_cpc2_IRES_like <- ires_cpc2[ires_cpc2$lib_prep == "Ouro-prep" &
+                             ires_cpc2$type == "IRES-like",] %>%
+                   distinct(circ_id, .keep_all = TRUE)
+
+ires_cpc2_IRES_count <- length(union(ires_cpc2_IRES[ires_cpc2_IRES$label == "coding","circ_id"],
+                                     ires_cpc2_IRES_like[ires_cpc2_IRES_like$label == "coding","circ_id"]))
+
+
+###==========================================###
+
+# Compute Specialization Potential Score
+cds_density <- ires_Ouro %>%
+  distinct(circ_id, cds_start, cds_end, .keep_all = TRUE) %>%
+  group_by(circ_id) %>%
+  summarize(cds_count = n()) %>%
+  arrange(desc(cds_count))
+
+sps <- merge(ires_density,
+             mir_hc_summary[,c("circ_id",
+                              "normalized_interaction_count")],
+             by = "circ_id")
+
+sps <- merge(sps,
+             cds_density[,c("circ_id",
+                           "cds_count")],
+             by = "circ_id")
+
+sps$normalized_cds_count <- sps$cds_count/(sps$circ_len/1000)
+
+# Calculate specialization scores
+sps$specialization_score <- 
+  (((sps$normalized_ires_count - mean(sps$normalized_ires_count)) / sd(sps$normalized_ires_count)
+   + (sps$normalized_cds_count - mean(sps$normalized_cds_count)) / sd(sps$normalized_cds_count))/2) -
+  (sps$normalized_interaction_count - mean(sps$normalized_interaction_count)) / sd(sps$normalized_interaction_count)
+
+# Create summary table of specialization scores by circRNA type
+sps_summary <- sps %>%
+  group_by(circ_type) %>%
+  summarise(
+    mean_score = mean(specialization_score, na.rm = TRUE),
+    median_score = median(specialization_score, na.rm = TRUE),
+    sd_score = sd(specialization_score, na.rm = TRUE),
+    min_score = min(specialization_score, na.rm = TRUE),
+    max_score = max(specialization_score, na.rm = TRUE),
+    n_circRNAs = n(),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(mean_score))
+```

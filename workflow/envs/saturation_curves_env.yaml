@@ -1,0 +1,7 @@
+name: saturation_curves
+channels:
+  - conda-forge
+dependencies:
+  - pandas
+  - numpy
+  - matplotlib

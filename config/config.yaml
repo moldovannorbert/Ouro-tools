@@ -1,0 +1,59 @@
+################################################################################
+########################## GENERAL PARAMETERS ##################################
+################################################################################
+
+# The name of the project will be used to separate the runs.
+ProjName: 
+# Sample sheet path.
+Samplesheet: 
+# Sample fastqs path.
+SamplePath: 
+# Output path.
+OutPath: 
+# TMPDIR path.
+TmpDir: 
+# Reference genome index path.
+RefPath: 
+# Reference gene annotation (in GTF format).
+AnnotPath: 
+# Number of threads to use.
+ThreadNr: 16
+# The mapping quality of reads to be kept.
+FiltQual: 5
+# The seed for reproducibility.
+seed: 42
+
+################################################################################
+############################## TRIMMING ########################################
+################################################################################
+# The number of additional bases to trimm from the end of the fragments.
+# Default is 0.
+ExtraEndTrim: 0
+
+################################################################################
+############################# DEDUPLICATION #####################################
+################################################################################
+# Similarity threshold for fuzzy matching (0.0-1.0)
+DedupSimilarity: 0.8
+# Number of bases to check for end sequences
+DedupEndLength: 20
+
+################################################################################
+######################### MIRNA BINDING SITE PREDICTION ########################
+################################################################################
+
+organism: human
+genome_version: hg38
+rRNA_annot: 
+miRNA_annot: 
+miR_family_info: 
+AGO_annot: 
+validated_interactions: 
+circbase_annot: 
+
+################################################################################
+############################# IRES prediction ##################################
+################################################################################
+
+# IRES-like hexamer motifs
+IRES-like_motifs: AATATA,AAAATA,AAATAT,AAATAA,AATAAA,ATATAA,AAAAAA,AAATTA,ATATAT,AAAAAT,ATAAAT,ATATTA,AATAAT,TATATA,ATAATA,AATTAA,ATAAAA,TATAAT,ATAAGA,AATATT,AAAATT,AAATAC,TAATAT,CATATA,ATTAAT,ACATAT,AATACA,ATACAA,AATTAT,ATATAG,TAAATA,TTATAA,AGAAGA,ATTATA,TATAAA,AACATA,TTAATA,TATATT,AATACT,ATATAC,AATAAG,AAATTC,GAGATA,CAAAAA,AATTTA,AAGATA,AACATT,ATTAGG,ACATAA,GAAGAA,TATACT,AGATAT,TCAAGC,AAGAAT,AAACAT,ATTATT,ACAAAA,AAAAGA,AATCAA,AAAGAC,TAAGAA,ATAAAC,TAGATT,ATAAAG,AATATC,TAATAA,ATTCGA,TATTTT,TAATTA,TATATG,GGAGAT,TAATCT,TAAAAA,AAATCC,ATCAAG,ATACTG,CATTAG,TGACAT,ATTTAA,AGATTA,TAAACA,CGAAAC,TATTAA,AATAGA,AATTCA,ATAAGT,AAACAA,ATACTA,ATATCT,AAGAAG,TATACA,GACATA,TGAATA,TAAGAC,AACTGA,TTATAT,TTTAAA

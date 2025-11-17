@@ -1,0 +1,498 @@
+---
+title: "Create_master"
+author: "Norbert Moldovan"
+date: "2025-04-16"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libs}
+# Load libraries.
+library(dplyr)
+library(tidyr)
+```
+
+## Create master data for visualizations
+
+```{r project_path}
+# Set the path to the project folder
+projPath <- "~/Documents/Ouroseq/Seq_runs/"
+```
+
+```{r utils}
+# Data loading function
+load_and_concatenate_files <- function(directory, pattern, sep, header = TRUE) {
+  # List all files in the directory and subdirectories that match the pattern
+  files <- list.files(path = directory, 
+                      pattern = pattern, 
+                      full.names = TRUE, 
+                      recursive = TRUE)
+
+  # Check if there are any files matching the pattern
+  if (length(files) == 0) {
+    stop("No files matching the pattern were found.")
+  }
+
+  # Read all matching CSV files into a list of data frames
+  data_list <- lapply(files, 
+                      read.csv, 
+                      stringsAsFactors = FALSE,
+                      sep = sep,
+                      header = header)
+
+  # Find the union of all column names
+  all_columns <- Reduce(union, 
+                        lapply(data_list, 
+                               colnames))
+
+  # Ensure all data frames have the same columns
+  data_list <- lapply(data_list, function(df) {
+    missing_cols <- setdiff(all_columns, 
+                            colnames(df))
+    df[missing_cols] <- 0
+    return(df[all_columns])
+  })
+
+  # Concatenate all data frames
+  combined_data <- do.call(rbind, 
+                           data_list)
+
+  return(combined_data)
+}
+
+# Merged chunked data
+merge_chunk_columns <- function(df) {
+  # Get column names
+  col_names <- colnames(df)
+  
+  # Create a pattern to match the chunk columns
+  chunk_pattern <- "_chunk_\\d+"
+  
+  # Extract base names without chunk patterns
+  base_names <- gsub(chunk_pattern, 
+                     "", 
+                     col_names)
+  
+  # Initialize result dataframe with same number of rows as input
+  result_df <- data.frame(row.names = row.names(df))
+  
+  # Get unique base names
+  unique_base_names <- unique(base_names)
+  
+  # For each unique base name, merge related columns
+  for (base_name in unique_base_names) {
+    # Find all columns related to this base name
+    related_indices <- which(base_names == base_name)
+    related_cols <- col_names[related_indices]
+    
+    # Skip empty base names
+    if (base_name == "")
+      next
+    
+    # If there's only one column with this base name and it doesn't have a chunk pattern
+    if (length(related_cols) == 1 && !grepl(chunk_pattern, 
+                                            related_cols)) {
+      # Just copy the column as is
+      result_df[[base_name]] <- df[[related_cols]]
+    } else {
+      # Sum the values of all related columns
+      result_df[[base_name]] <- rowSums(df[, 
+                                           related_cols, 
+                                           drop = FALSE], 
+                                        na.rm = TRUE)
+    }
+  }
+  
+  return(result_df)
+}
+
+create_key_file <- function(input_table) {
+  # Check if the input table has the required structure
+  if (ncol(input_table) < 2) {
+    stop("Input table must have at least 2 columns (keys and at least one file)")
+  }
+  
+  # Extract keys (first column)
+  keys <- input_table[, 1]
+  
+  # Get file names from column headers (excluding the first column)
+  file_names <- colnames(input_table)[-1]
+  file_names <- gsub("\\.", "-", file_names)
+  
+  # Initialize empty result dataframe
+  result <- data.frame(circ_id = character(), 
+                       file_name = character(), 
+                       stringsAsFactors = FALSE)
+  
+  # For each file (column), find keys with values > 0
+  for (file_idx in 1:length(file_names)) {
+    fileName <- file_names[file_idx]
+    # Column index is file_idx + 1 because the first column contains keys
+    values <- input_table[, file_idx + 1]
+    
+    # Find indices where the value is > 0
+    positive_indices <- which(values > 0)
+    
+    if (length(positive_indices) > 0) {
+      # Add rows to result for each key with positive value
+      new_rows <- data.frame(
+        circ_id = keys[positive_indices],
+        file_name = fileName,
+        stringsAsFactors = FALSE
+      )
+      result <- rbind(result, new_rows)
+    }
+  }
+  # Return the result dataframe
+  return(result)
+}
+```
+
+```{r file_key}
+# Load expression data
+expDf <- load_and_concatenate_files(projPath,
+                                    ".expression",
+                                    "\t")
+# Merge chunked columns
+expDf <- merge_chunk_columns(expDf)
+
+# Create key file
+keyDf <- create_key_file(expDf)
+```
+
+```{r create_meta_key}
+# Load metadata
+metaDf <- load_and_concatenate_files(projPath,
+                                     "Metadata_Ouroseq.csv",
+                                     ",")
+metaKeyDf <- merge(metaDf,
+                   keyDf,
+                   by = "file_name")
+```
+
+```{r read_length_master}
+# Load read length data
+readLDf <- read.csv2(paste0(projPath, "/Read_length_distribution_master.tsv"),
+                       sep = "\t")
+
+# Merge read length data with metadata
+readLDf <- merge(readLDf,
+                 metaDf,
+                 by = "file_name")
+
+write.table(readLDf, 
+            file = paste0(projPath, "/Read_length_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+```
+
+```{r circRNA_type_master}
+circTypeDf <- read.csv2(paste0(projPath, "/Detected_type_counts_master.tsv"),
+                       sep = "\t")
+circTypeDf <- merge(metaDf,
+                    circTypeDf,
+                    by = "file_name")
+
+write.table(circTypeDf, 
+            file = paste0(projPath, "/circRNA_type_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+```
+
+```{r circRNA_master}
+# Load Collapsed_info_master
+circRNADf <- load_and_concatenate_files(projPath,
+                                     "\\.info",
+                                     "\t",
+                                     header = FALSE)
+
+# Transform the data frame to the desired format
+circRNADf <- circRNADf %>%
+  # Extract basic information from V1-V8
+  mutate(
+    chr = V1,
+    start = as.numeric(V4),
+    end = as.numeric(V5),
+    count = as.numeric(V6),
+    strand = V7
+  ) %>%
+  # Extract information from V9
+  mutate(
+    # Extract circ_id from the beginning of V9
+    circ_id = gsub("circ_id (.*?);.*", "\\1", V9),
+    # Extract splice_site
+    splice_site = gsub(".*splice_site (.*?);.*", "\\1", V9),
+    # Extract equivalent_seq
+    equivalent_seq = gsub(".*equivalent_seq (.*?);.*", "\\1", V9),
+    # Extract circ_type
+    circ_type = gsub(".*circ_type (.*?);.*", "\\1", V9),
+    # Extract circ_len
+    circ_len = as.numeric(gsub(".*circ_len (.*?);.*", "\\1", V9)),
+    # Extract isoform
+    isoform = gsub(".*isoform (.*?);.*", "\\1", V9),
+    # Extract gene_id - handle missing values
+    gene_id = ifelse(grepl("gene_id", V9), 
+                    gsub(".*gene_id (.*?);.*", "\\1", V9),
+                    NA_character_),
+    # Extract gene_name - handle missing values
+    gene_name = ifelse(grepl("gene_name", V9),
+                      gsub(".*gene_name (.*?);.*", "\\1", V9),
+                      NA_character_)
+  ) %>%
+  # Select only the desired columns in the specified order
+  select(chr, start, end, count, strand, circ_id, splice_site, equivalent_seq,
+         circ_type, circ_len, isoform, gene_id, gene_name)
+
+# Check for circRNAs in circRNADf that don't have a match in metaKeyDf
+missing_in_metaKeyDf <- circRNADf$circ_id[!circRNADf$circ_id %in% metaKeyDf$circ_id]
+if (length(missing_in_metaKeyDf) > 0) {
+  cat("CircRNAs in circRNADf that don't have a match in metaKeyDf:\n")
+  print(missing_in_metaKeyDf)
+} else {
+  cat("All circRNAs in circRNADf have a match in metaKeyDf.\n")
+}
+
+# Check for circRNAs in metaKeyDf that don't have a match in circRNADf
+missing_in_circRNADf <- metaKeyDf$circ_id[!metaKeyDf$circ_id %in% circRNADf$circ_id]
+if (length(missing_in_circRNADf) > 0) {
+  cat("CircRNAs in metaKeyDf that don't have a match in circRNADf:\n")
+  print(missing_in_circRNADf)
+} else {
+  cat("All circRNAs in metaKeyDf have a match in circRNADf.\n")
+}
+
+# Rename circ_ID to circ_id in expDf
+expDf <- expDf %>%
+  rename_with(~"circ_id", .cols = "circ_ID")
+
+# Transform expDf from wide to long format to get per-sample counts
+expDf_long <- expDf %>%
+  pivot_longer(cols = -circ_id,
+               names_to = "file_name",
+               values_to = "count") %>%
+  # Replace dots with dashes in file_name to match metadata
+  mutate(file_name = gsub("\\.", "-", file_name))
+
+# Merge circRNA data with metadata first
+circRNADf <- merge(circRNADf,
+                   metaKeyDf,
+                   by = "circ_id")
+
+# Merge with expression data to get correct per-sample counts
+circRNADf <- merge(circRNADf,
+                   expDf_long,
+                   by = c("circ_id", "file_name"))
+
+# Remove the old count column and rename the new one
+circRNADf <- circRNADf %>%
+  select(-count.x) %>%
+  rename_with(~"count", .cols = "count.y")
+
+# Remove circRNA without a canonical splice signal.
+circRNADf <- circRNADf[circRNADf$splice_site != "None",]
+
+write.table(circRNADf, 
+            file = paste0(projPath, "/circRNA_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+```
+
+```{r create_circRNA_gtf}
+# Create a GTF file from circRNADf
+circRNADf_gtf <- circRNADf %>%
+  # Split isoforms into separate rows while preserving strand
+  separate_rows(isoform, sep = "\\|") %>%
+  # Split each isoform into its exons
+  mutate(exon_list = strsplit(isoform, ",")) %>%
+  # Create a row for each exon
+  unnest(exon_list) %>%
+  # Split exon coordinates into start and end
+  separate(exon_list, into = c("exon_start", "exon_end"), sep = "-", convert = TRUE) %>%
+  # First group by circ_id to create unique isoform numbers for each circRNA
+  group_by(circ_id) %>%
+  mutate(isoform_num = as.numeric(factor(isoform, levels = unique(isoform)))) %>%
+  ungroup() %>%
+  # Then group by circ_id and isoform for transcript information
+  group_by(circ_id, isoform, strand) %>%
+  mutate(
+    transcript_id = paste0(circ_id, "-isoform", isoform_num),
+    # Create exon numbers within each transcript
+    exon_number = row_number(),
+    # Create attributes column
+    attributes = paste0(
+      'gene_id "', transcript_id, '"; ',
+      'transcript_id "', transcript_id, '"; ',
+      'exon_number "', exon_number, '"; ',
+      'gene_name "', transcript_id, '"; ',
+      'circ_type "', circ_type, '"; ',
+      'count "', count, '";'
+    ),
+    # Add source and feature columns
+    source = "Ouroseq",
+    feature = "exon",
+    score = ".",
+    frame = "."
+  ) %>%
+  ungroup() %>%
+  # Select and arrange columns for GTF format
+  select(
+    chr,
+    source,
+    feature,
+    exon_start,
+    exon_end,
+    score,
+    strand,
+    frame,
+    attributes,
+    transcript_id,
+    exon_number
+  ) %>%
+  arrange(transcript_id, exon_number) %>%
+  # Remove temporary columns after arranging
+  select(-transcript_id, -exon_number)
+
+# Write the GTF file
+write.table(circRNADf_gtf, 
+            file = paste0(projPath, "/circRNA_master.gtf"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            col.names = FALSE,
+            quote = FALSE)
+```
+
+```{r cpc2_master}
+# Load CPC2 data
+cpc2Df <- load_and_concatenate_files(projPath,
+                                     "cpc2_results",
+                                     "\t")
+
+# Separate #ID into columns.
+cpc2Df <- separate(cpc2Df, 
+                   col = X.ID, 
+                   into = c("circ_id", "gene_id", "circ_type"), 
+                   sep = "\\|")
+
+# Remove duplicate rows from cpc2Df
+cpc2Df <- cpc2Df %>% 
+  distinct()
+
+# Merge CPC2 data with metadata
+masterCpc2Df <- merge(cpc2Df,
+                      metaKeyDf,
+                      by = "circ_id")
+
+write.table(masterCpc2Df, 
+            file = paste0(projPath, "/CPC2_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+
+# Function to extract coding peptide sequences to FASTA file
+extract_coding_peptides_to_fasta <- function(df, output_file) {
+  # Filter for coding sequences
+  coding_df <- df[df$label == "coding", ]
+  
+  # Check if there are any coding sequences
+  if (nrow(coding_df) == 0) {
+    cat("No coding sequences found. Creating empty FASTA file.\n")
+    file.create(output_file)
+    return(invisible(NULL))
+  }
+  
+  # Check if putative_peptide column exists
+  if (!"putative_peptide" %in% colnames(coding_df)) {
+    stop("putative_peptide column not found in the data frame.")
+  }
+  
+  # Remove rows with missing or invalid peptide sequences
+  coding_df <- coding_df[!is.na(coding_df$putative_peptide) & 
+                         coding_df$putative_peptide != "" & 
+                         coding_df$putative_peptide != "non", ]
+  
+  if (nrow(coding_df) == 0) {
+    cat("No valid peptide sequences found. Creating empty FASTA file.\n")
+    file.create(output_file)
+    return(invisible(NULL))
+  }
+  
+  # Open file for writing
+  fasta_file <- file(output_file, "w")
+  
+  # Write each sequence to FASTA format
+  for (i in 1:nrow(coding_df)) {
+    # Write header (circ_id)
+    writeLines(paste0(">", coding_df$circ_id[i]), fasta_file)
+    # Write sequence
+    writeLines(coding_df$putative_peptide[i], fasta_file)
+  }
+  
+  # Close file
+  close(fasta_file)
+  
+  cat(paste0("Extracted ", nrow(coding_df), " coding peptide sequences to ", output_file, "\n"))
+}
+
+# Extract coding peptides to FASTA file
+extract_coding_peptides_to_fasta(masterCpc2Df, 
+                                  paste0(projPath, "/CPC2_coding_peptides.fasta"))
+
+```
+
+```{r ires_master}
+# Load IRES data
+iresDf <- load_and_concatenate_files(projPath,
+                                     "ires_prediction_results_merged",
+                                     ",")
+# Separate name into columns.
+iresDf <- separate(iresDf, 
+                   col = name, 
+                   into = c("circ_id", "gene_id", "circ_type"), 
+                   sep = "\\|")
+# Remove duplicate rows from iresDf
+iresDf <- iresDf %>% 
+  distinct()
+
+# Merge IRES data with metadata
+masterIresDf <- merge(iresDf,
+                      metaKeyDf,
+                      by = "circ_id")
+
+write.table(masterIresDf, 
+            file = paste0(projPath, "/IRES_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+
+```{r miRNA_interaction_master}
+# Load miRNA data
+miRDf <- load_and_concatenate_files(projPath,
+                                    ".circr_output.csv",
+                                    ",")
+# Rename column.
+miRDf <- miRDf %>% rename(circ_id = Circ.Name,
+                          mirna_name = miRNA.Name,
+                          seed_type = Seed.Category,
+                          software_matche = Software.Matched)
+
+# Merge miRNA data with metadata
+mastermiRDf <- merge(miRDf,
+                     metaKeyDf,
+                     by = "circ_id")
+
+write.table(mastermiRDf, 
+            file = paste0(projPath, "/miRNA_interaction_master.tsv"), 
+            sep = "\t", 
+            row.names = FALSE, 
+            quote = FALSE)
+
+```
+

@@ -1,0 +1,6 @@
+name: trimming
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - porechop=0.2.4

@@ -1,0 +1,911 @@
+---
+title: "Ouro_vis"
+author: "Norbert Moldovan"
+date: "2025-04-16"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libs}
+# Load libraries.
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+library(magick)
+library(ggseqlogo)
+library(Biostrings)
+library(tidyr)
+```
+
+```{r project_path}
+# Set the path to the project folder
+projPath <- "~/Documents/Ouroseq/Seq_runs/"
+```
+
+```{r load_data}
+# Load read length data
+rlDf <- read.delim(paste0(projPath, "/Read_length_master.tsv"),
+                     header = TRUE)
+# Load circRNA type data
+circTypeDf <- read.delim(paste0(projPath, "/circRNA_type_master.tsv"),
+                        header = TRUE)
+# Load circRNA data
+circRNADf <- read.delim(paste0(projPath, "/circRNA_master.tsv"),
+                        header = TRUE)
+
+# Load miRNA:circRNA interactions data
+mirDf <- read.delim(paste0(projPath, "/miRNA_interaction_master.tsv"),
+                        header = TRUE)
+
+# Load IRES data
+iresDf <- read.delim(paste0(projPath, "/IRES_master.tsv"),
+                     header = TRUE)
+iresDf$circ_type <- sub("_iso\\d+$", "", iresDf$circ_type)
+
+# Load coding potential data
+cpc2Df <- read.delim(paste0(projPath, "CPC2_master.tsv"),
+                     header = TRUE)
+cpc2Df$circ_type <- sub("_iso\\d+$", "", cpc2Df$circ_type)
+cpc2Df <- cpc2Df[cpc2Df$circ_id %in% circRNADf$circ_id,]
+```
+## Figures of (manuscript reference)
+
+```{r Fig1A, fig.cap=fc1}
+# Create a figure object that can be used later as a panel in Fig1
+fig1a <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig1A.pdf",
+                                                 density = 300))
+```
+
+```{r Fig1B, fig.cap=fc1}
+# Create a figure object that can be used later as a panel in Fig1
+fig1b <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig1B.pdf",
+                                                 density = 300))
+```
+
+```{r Fig1C, fig.cap=fc1}
+fig1c <- ggplot(rlDf,
+       aes(x = factor(lib_prep,
+                      levels = c("Ouro-prep", "SQK-PCB-114"),
+                      labels = c("Ouro-seq", "LRDO")),
+           y = read_length,
+           color = factor(lib_prep,
+                         levels = c("Ouro-prep", "SQK-PCB-114"),
+                         labels = c("Ouro-seq", "LRDO")),
+           weight = count)) +
+  geom_violin(width=.7,) + 
+  geom_boxplot(width=.05,
+               outlier.shape = NA) +
+  scale_y_log10(guide = "axis_logticks",
+                labels = function(x) sprintf("%.0f", x)) +
+  scale_color_manual(values = c("Conventional" = "#818689",
+                                "Ouro-seq" = "#6495ED")) +
+  facet_wrap(.~factor(sample_type,
+                      levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                      labels = c("CVS","Urine", "Plasma")),
+             scales = "free_x") +
+  theme_minimal() +
+  labs(x = NULL,
+       y = "Read length (log10 bp)",
+       color = "Library prep") +
+  guides(fill = "none") +
+  theme_classic() +
+  labs(color="") + 
+  theme(axis.text = element_text(size=7),
+        axis.title = element_text(size=7),
+        strip.text = element_text(size=7),
+        strip.background = element_blank(),
+        legend.position="none")
+```
+
+```{r Fig2A, fig.cap=fc2}
+fig2a <- ggplot(circTypeDf,
+       aes(x = factor(lib_prep,
+                           levels = c("Ouro-prep", "SQK-PCB-114"),
+                           labels = c("Ouro-seq", "LRDO")),
+           y = prop_Splice_signal,
+           colour = factor(lib_prep,
+                           levels = c("Ouro-prep", "SQK-PCB-114"),
+                           labels = c("Ouro-seq", "LRDO")))) +
+  geom_boxplot(width = .3,
+               outlier.shape=NA) +
+  geom_jitter(width = .1,
+              size=1,
+              alpha=1) +
+  scale_y_continuous(labels = function(x) paste0(x*100)) +
+  scale_color_manual(values = c("LRDO" = "#818689",
+                                "Ouro-seq" = "#6495ED")) +
+  stat_compare_means(label="p.signif",
+                     ref.group="LRDO",
+                     size = 3,
+                     vjust = .5) +
+  facet_wrap(.~factor(sample_type,
+                      levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                      labels = c("CVS","Urine", "Plasma")),
+             scales = "free_x") +
+  theme(aspect.ratio = 1) +
+  theme_minimal() +
+  labs(x = NULL,
+       y = "Proportion of full-length circRNA (%)",
+       color = "Library prep") +
+  theme_classic() +
+  labs(color="") + 
+  theme(axis.text = element_text(size=7),
+        axis.title = element_text(size=7),
+        strip.text = element_text(size=7),
+        strip.background = element_blank(),
+        legend.position="none")
+```
+
+```{r Fig2B, fig.cap=fc2}
+fig2b <- ggplot(circTypeDf,
+       aes(x = factor(lib_prep,
+                           levels = c("Ouro-prep", "SQK-PCB-114"),
+                           labels = c("Ouro-seq", "LRDO")),
+           y = prop_Spike_in,
+           colour = factor(lib_prep,
+                           levels = c("Ouro-prep", "SQK-PCB-114"),
+                           labels = c("Ouro-seq", "LRDO")))) +
+  geom_boxplot(width = .3,
+               outlier.shape=NA) +
+  geom_jitter(width = .1,
+              size=1,
+              alpha=1) +
+  scale_y_log10(guide = "axis_logticks",
+                labels = function(x) sprintf("%.2f", x*100)) +
+  scale_color_manual(values = c("LRDO" = "#818689",
+                                "Ouro-seq" = "#6495ED")) +
+  stat_compare_means(label="p.signif",
+                     ref.group="LRDO",
+                     size = 3,
+                     vjust = .5) +
+  facet_wrap(.~factor(sample_type,
+                      levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                      labels = c("CVS","Urine", "Plasma")),
+             scales = "free_x") +
+  theme(aspect.ratio = 1) +
+  theme_minimal() +
+  labs(x = NULL,
+       y = "Proportion of full-length circRNA spike-in (log10 %)",
+       color = "Library prep") +
+  theme_classic() +
+  labs(color="") + 
+  theme(axis.text = element_text(size=7),
+        axis.title = element_text(size=7),
+        strip.text = element_text(size=7),
+        strip.background = element_blank(),
+        legend.position="none")
+```
+
+```{r Fig2C, fig.cap=fc2}
+fig2c <- ggplot(circRNADf,
+       aes(x = factor(lib_prep,
+                      levels = c("Ouro-prep", "SQK-PCB-114"),
+                      labels = c("Ouro-seq", "LRDO")),
+           y = circ_len,
+           color = factor(lib_prep,
+                         levels = c("Ouro-prep", "SQK-PCB-114"),
+                         labels = c("Ouro-seq", "LRDO")),
+           weight = count)) +
+  geom_violin(width=.7,) + 
+  geom_boxplot(width=.05,
+               outlier.shape = NA) +
+  scale_y_log10(guide = "axis_logticks",
+                labels = function(x) sprintf("%.1f", x)) +
+  scale_color_manual(values = c("Conventional" = "#818689",
+                                "Ouro-seq" = "#6495ED")) +
+  stat_compare_means(label="p.signif",
+                     ref.group="LRDO",
+                     size = 3,
+                     vjust = .5) +
+  facet_wrap(.~factor(sample_type,
+                      levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                      labels = c("CVS","Urine", "Plasma")),
+             scales = "free_x") +
+  theme_minimal() +
+  labs(x = NULL,
+       y = "Full-length circRNA length (log10 bp)",
+       color = "Library prep") +
+  guides(fill = "none") +
+  theme_classic() +
+  labs(color="") + 
+  theme(axis.text = element_text(size=7),
+        axis.title = element_text(size=7),
+        strip.text = element_text(size=7),
+        strip.background = element_blank(),
+        legend.position="none")
+```
+
+```{r Fig2D, fig.cap=fc2}
+circTypeDf$Total_reads_no_spike <- circTypeDf$Total_reads - circTypeDf$Spike_in
+# First, let's calculate the total reads per sample (excluding spike-ins)
+total_reads_per_sample <- circTypeDf %>%
+  select(file_name, Total_reads_no_spike) %>%
+  distinct()
+
+# Modified simulate_saturation function to account for non-circRNA reads
+simulate_saturation <- function(sample_data, total_reads, fractions = seq(0.1, 1.0, by = 0.1), replicates = 10) {
+    results <- data.frame()
+    
+    if (total_reads == 0 || nrow(sample_data) == 0) {
+        return(data.frame(
+            fraction = fractions,
+            subsample_reads = 0,
+            detected_circRNAs = 0
+        ))
+    }
+    
+    # Get the counts vector for circRNAs
+    circ_counts <- sample_data$count
+    total_circ_reads <- sum(circ_counts)
+    
+    # Calculate probability for non-circRNA reads (they should be one category)
+    non_circ_reads <- total_reads - total_circ_reads
+    
+    # Create complete probability vector including non-circRNA reads as one category
+    all_counts <- c(circ_counts, non_circ_reads)
+    pvals <- all_counts / sum(all_counts)
+    
+    for (f in fractions) {
+        subsample_reads <- round(total_reads * f)
+        detections <- numeric(replicates)
+        
+        for (i in 1:replicates) {
+            # Simulate using multinomial distribution
+            sim <- rmultinom(1, size = subsample_reads, prob = pvals)
+            # Count only circRNAs (excluding the last category which is non-circRNA)
+            detected <- sum(sim[-length(sim)] > 0)
+            detections[i] <- detected
+        }
+        
+        results <- rbind(results, data.frame(
+            fraction = f,
+            subsample_reads = subsample_reads,
+            detected_circRNAs = mean(detections)
+        ))
+    }
+    
+    return(results)
+}
+
+# Set random seed for reproducibility
+set.seed(42)
+
+# Create saturation curves for each sample
+saturation_data <- data.frame()
+
+# Process each sample
+for (sample in unique(circRNADf$file_name)) {
+    # Get the circRNA data for this sample
+    sample_circRNAs <- circRNADf %>%
+        filter(file_name == sample)
+    
+    # Get total reads for this sample (including non-circRNA reads)
+    total_reads <- total_reads_per_sample %>%
+        filter(file_name == sample) %>%
+        pull(Total_reads_no_spike)
+    
+    # Run simulation for this sample
+    sim_results <- simulate_saturation(
+        sample_data = sample_circRNAs,
+        total_reads = total_reads,
+        fractions = seq(0.0, 1.0, length.out = 50),
+        replicates = 100
+    )
+    
+    # Add sample metadata
+    sim_results$file_name <- sample
+    sim_results$sample_type <- unique(sample_circRNAs$sample_type)
+    sim_results$lib_prep <- unique(sample_circRNAs$lib_prep)
+    sim_results$total_reads <- total_reads
+    
+    # Combine with main results
+    saturation_data <- rbind(saturation_data, sim_results)
+}
+
+# Modify the aggregated data to use percentages, using reframe() instead of summarise()
+aggregated_data <- saturation_data %>%
+    group_by(sample_type, lib_prep, fraction) %>%
+    reframe(
+        mean_subsample_reads = fraction * 100,  # Convert to percentage
+        mean_detected_circRNAs = mean(detected_circRNAs)
+    )
+
+# Plot aggregated saturation curves with percentage x-axis
+fig2d <- ggplot(aggregated_data,
+       aes(x = mean_subsample_reads,
+           y = mean_detected_circRNAs,
+           color = factor(lib_prep,
+                          levels = c("Ouro-prep", "SQK-PCB-114"),
+                          labels = c("Ouro-seq", "LRDO")),
+           linetype = factor(sample_type,
+                             levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                             labels = c("CVS", "Urine", "Plasma")))) +
+    geom_line(size = .5) +
+    scale_x_continuous(limits = c(0, 100),
+                       breaks = seq(0, 100, by = 20)) +
+    scale_color_manual(values = c("LRDO" = "#818689",
+                                 "Ouro-seq" = "#6495ED")) +
+    scale_linetype_manual(values = c("CVS" = "solid", "Urine" = "dashed", "Plasma" = "dotdash")) +
+    labs(x = "Proportion of non-spike-in reads (%)",
+         y = "Number of full-length circRNA",
+         color = "Method",
+         linetype = "Sample type") +
+    theme_classic() +
+    theme(axis.text = element_text(size = 7),
+          axis.title = element_text(size = 7),
+          legend.position = "top",
+          legend.title = element_text(size = 7),
+          legend.text = element_text(size = 7),
+          legend.box = "vertical",
+          legend.margin = margin(t = 0, r = 0, b = -0.5, l = 0)) +
+    guides(color = guide_legend(order = 1),
+           linetype = guide_legend(order = 2))
+```
+
+
+```{r Fig3A, fig.cap=fc3}
+# Create a figure object that can be used later as a panel in Fig1
+fig3a <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig3A.pdf",
+                                                 density = 300))
+```
+
+```{r Fig3B, fig.cap=fc3}
+fig3b <- ggplot(circRNADf[circRNADf$lib_prep == "Ouro-prep",],
+       aes(x = factor(sample_type,
+                             levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                             labels = c("CVS", "Urine", "Plasma")),
+           fill = factor(circ_type,
+                      levels = c("exon", "intron", "intergenic", "antisense", "Unknown"),
+                      labels = c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")))) +
+    geom_bar(position = "fill",
+             width = .5)+
+    scale_y_continuous(labels = function(x) paste0(x*100)) +
+    scale_fill_npg() +
+    labs(x = NULL,
+         y = "Proportion of circRNA type (%)",
+         fill = NULL) +
+    theme_classic() +
+    theme(axis.text = element_text(size = 7),
+          axis.title = element_text(size = 7),
+          legend.position = "top",
+          legend.title = element_text(size = 7),
+          legend.text = element_text(size = 7),
+          legend.key.size = unit(0.5, "lines"))
+```
+
+```{r Fig3C, fig.cap=fc3}
+fig3c <- ggplot(circRNADf[circRNADf$lib_prep == "Ouro-prep",],
+       aes(x = factor(circ_type,
+                      levels = c("exon", "intron", "intergenic", "antisense", "Unknown"),
+                      labels = c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")),
+           y = circ_len,
+           color = factor(circ_type,
+                      levels = c("exon", "intron", "intergenic", "antisense", "Unknown"),
+                      labels = c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")),
+           weight = count)) +
+  geom_violin(width=.7,) + 
+  geom_boxplot(width=.05,
+               outlier.shape = NA) +
+  scale_y_log10(guide = "axis_logticks") +
+  scale_color_npg() +
+  theme_minimal() +
+  labs(x = NULL,
+       y = "circRNA length (log10 bp)",
+       color = NULL) +
+  guides(fill = "none") +
+  theme_classic() +
+  labs(color="") + 
+  theme(axis.text = element_text(size=7),
+        axis.title = element_text(size=7),
+        strip.text = element_text(size=7),
+        strip.background = element_blank(),
+        legend.position="none")
+```
+
+```{r Fig3D, fig.cap=fc3}
+# Extract and clean splice signals
+circRNADf_clean <- circRNADf[circRNADf$lib_prep == "Ouro-prep",]
+# More thorough cleaning of splice signals - remove everything after the splice site pattern
+circRNADf_clean$splice_signal <- gsub("([A-Z]+-[A-Z]+).*", "\\1", circRNADf_clean$splice_site)
+circRNADf_clean$splice_signal <- gsub("T", "U", circRNADf_clean$splice_signal)
+
+# Count unique circRNAs by splice signal
+splice_counts <- aggregate(count ~ splice_signal, data = circRNADf_clean, FUN = sum)
+splice_counts$proportion <- splice_counts$count / sum(splice_counts$count)
+
+# Order by frequency
+splice_counts <- splice_counts[order(-splice_counts$proportion),]
+splice_counts$splice_signal <- factor(splice_counts$splice_signal, 
+                                     levels = splice_counts$splice_signal)
+
+# Create the barplot
+fig3d <- ggplot(splice_counts, 
+       aes(x = factor(splice_signal,
+                      levels = c("AG-GU","AG-GC","AC-AU","AG-AU","AC-GU","GA-GU"),
+                      labels = c("AG|GU","AG|GC","AC|AU","AG|AU","AC|GU","GA|GU")), 
+           y = proportion)) +
+  geom_bar(stat = "identity", 
+           color = "black",
+           fill = "white",
+           width = .5) +
+  scale_y_continuous(labels = function(x) paste0(x*100)) +
+  labs(x = NULL,
+       y = "Proportion of splice signals (%)",
+       fill = NULL) +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "none")
+
+
+```
+
+```{r Fig3E, fig.cap=fc3}
+# Load circRNA sequences from FASTA file
+fasta_file <- paste0(projPath, "/circRNA_seq.fasta")
+circ_sequences <- readDNAStringSet(fasta_file)
+
+# Extract sequence IDs and sequences as data frame
+seq_df <- data.frame(
+  circ_id = names(circ_sequences),
+  sequence = as.character(circ_sequences),
+  stringsAsFactors = FALSE
+)
+
+# Filter circRNADf for Ouro-prep samples
+circRNADf_ouro <- circRNADf[circRNADf$lib_prep == "Ouro-prep",]
+
+# Match sequences with metadata
+seq_df_matched <- merge(seq_df, 
+                        circRNADf_ouro[,c("circ_id", "circ_type")],
+                        by = "circ_id")
+
+# Extract BSJ regions: first 5 bases (+1 to +5) and last 5 bases (-5 to -1)
+seq_df_matched$bsj_region <- apply(seq_df_matched, 1, function(row) {
+  seq <- row["sequence"]
+  seq_len <- nchar(seq)
+  
+  # Get last 5 bases (before BSJ: -5 to -1)
+  last_5 <- substr(seq, seq_len - 4, seq_len)
+  
+  # Get first 5 bases (after BSJ: +1 to +5)
+  first_5 <- substr(seq, 1, 5)
+  
+  # Combine them
+  bsj_seq <- paste0(last_5, first_5)
+  
+  # Replace T with U for RNA
+  bsj_seq <- gsub("T", "U", bsj_seq)
+  
+  return(bsj_seq)
+})
+
+# Prepare data for ggseqlogo - group by circRNA type
+seq_list <- split(seq_df_matched$bsj_region, seq_df_matched$circ_type)
+
+# Reorder to match the standard order used in other figures
+type_order <- c("exon", "intron", "intergenic", "antisense", "Unknown")
+type_labels <- c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")
+
+# Filter to only include types that exist in the data
+seq_list_ordered <- seq_list[intersect(type_order, names(seq_list))]
+
+# Rename list elements to use pretty labels
+names(seq_list_ordered) <- type_labels[match(names(seq_list_ordered), type_order)]
+
+# Create the sequence logo plot
+fig3e <- ggseqlogo(seq_list_ordered, 
+                   method = 'prob',
+                   ncol = 2) +
+  geom_vline(xintercept = 5.5, 
+             linetype = "dashed", 
+             color = "black",
+             linewidth = 0.3) +
+  scale_x_continuous(breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+                     labels = c("-5", "-4", "-3", "-2", "-1", 
+                               "+1", "+2", "+3", "+4", "+5")) +
+  labs(x = "Position relative to BSJ",
+       y = "Proportion") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        strip.background = element_blank())
+
+```
+
+```{r Fig4A, fig.cap=fc4}
+# Subset for high confidence interactions.
+mir_hcDf <- mirDf[mirDf$lib_prep == "Ouro-prep" &
+                  mirDf$software_matche == 3 |
+                  (mirDf$software_matche == 2 &
+                   mirDf$Validated == "Yes") |
+                  (mirDf$software_matche == 2 & 
+                   mirDf$AGO == "Yes"),]
+
+# Create a summary table of miRNA interactions per circRNA and seed type
+mirSeed_hc_summary <- mir_hcDf %>%
+  distinct(circ_id, ID, .keep_all = TRUE) %>%
+  group_by(circ_id, seed_type) %>%
+  summarize(interaction_count = n()) %>%
+  arrange(desc(interaction_count))
+
+mirSeed_hc_summary <- merge(mirSeed_hc_summary,
+                        circRNADf[,c("circ_id",
+                                     "circ_type",
+                                     "circ_len")],
+                        by = "circ_id")
+
+mirSeed_hc_summary$normalized_interaction_count <- mirSeed_hc_summary$interaction_count/(mirSeed_hc_summary$circ_len/1000)
+
+fig4a <- ggplot(mirSeed_hc_summary, 
+       aes(x = factor(circ_type,
+                         levels = c("exon", "intron", "intergenic", "antisense", "Unknown"),
+                         labels = c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")), 
+           fill = seed_type,
+           weight = normalized_interaction_count)) +
+  geom_bar(position = "fill",
+           width = .5) +
+  scale_y_continuous(labels = function(x) paste0(x*100)) +
+  labs(x = "",
+       y = "Proportion of miRNA seeds (%)",
+       fill = NULL) +
+  scale_fill_futurama() +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "top",
+        legend.key.size = unit(0.5, "lines"))
+```
+
+```{r Fig4B, fig.cap=fc4}
+# Create a summary table of miRNA interactions per circRNA
+
+circRNA_unique <- circRNADf %>%
+  distinct(circ_id, .keep_all = TRUE)
+
+mir_hc_summary <- mir_hcDf %>%
+  distinct(circ_id, ID, .keep_all = TRUE) %>%
+  group_by(circ_id) %>%
+  summarize(interaction_count = n()) %>%
+  arrange(desc(interaction_count))
+
+mir_hc_summary <- merge(mir_hc_summary,
+                        circRNA_unique[,c("circ_id",
+                                     "circ_type",
+                                     "circ_len")],
+                        by = "circ_id")
+
+mir_hc_summary$normalized_interaction_count <- mir_hc_summary$interaction_count/(mir_hc_summary$circ_len/1000)
+
+fig4b <- ggplot(mir_hc_summary, 
+       aes(x = normalized_interaction_count,
+           fill = factor(circ_type,
+                         levels = c("exon", "intron", "intergenic", "antisense", "Unknown"),
+                         labels = c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")))) +
+  geom_histogram(position = "fill",
+                 bins = 30) +
+  scale_y_continuous(labels = function(x) paste0(x*100)) +
+  labs(x = "miRNA:circRNA interaction count per Kbp",
+       y = "Proportion of circRNA (%)",
+       fill = NULL) +
+  scale_fill_npg() +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 7),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "top",
+        legend.key.size = unit(0.5, "lines"),
+        legend.direction = "horizontal",
+        legend.box = "vertical",
+        legend.box.just = "center") +
+  guides(fill = guide_legend(nrow = 2))
+```
+
+```{r Fig4C, fig.cap=fc4}
+# Fig4C: Proportion of coding vs noncoding circRNA per type (unique circ_id)
+
+# Prepare unique circRNA entries from CPC2 with coding status
+cpc2_unique <- cpc2Df[cpc2Df$lib_prep == "Ouro-prep",] %>%
+  distinct(circ_id, .keep_all = TRUE)
+
+# Define order and display labels for circRNA types
+lvl <- c("exon", "intron", "intergenic", "antisense", "Unknown")
+lab <- c("Exonic", "Intronic", "Intergenic", "Antisense", "Unknown")
+
+axis_labs <- setNames(
+  paste0(levels(counts$circ_type)),
+  levels(counts$circ_type)
+)
+
+# Stacked proportion barplot
+fig4c <- ggplot(counts, aes(x = circ_type, 
+                            y = n, 
+                            fill = factor(label,
+                                          levels = c("noncoding","coding"),
+                                          labels = c("Non-coding", "Coding")))) +
+  geom_bar(stat = "identity", 
+           position = "fill", 
+           width = .5) +
+  scale_y_continuous(labels = function(x) paste0(x * 100)) +
+  scale_x_discrete(labels = axis_labs) +
+  scale_fill_manual(values = c("Coding" = "#6A3D9A",
+                               "Non-coding" = "#D3D3D3"), 
+                    name = NULL) +
+  labs(x = NULL, 
+       y = "Proportion of circRNA (%)") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "top",
+        legend.key.size = unit(0.5, "lines"))
+
+```
+
+```{r Fig4D, fig.cap=fc4}
+# Create a summary table of IRES interactions per circRNA
+ires_Ouro <- iresDf[iresDf$circ_id %in% cpc2_unique$circ_id & 
+                    iresDf$lib_prep == "Ouro-prep",]
+
+ires_orf_dist <- ires_Ouro %>%
+  group_by(type, distance_to_orf) %>%
+  summarize(ires_count = n()) %>%
+  arrange(desc(ires_count))
+
+
+# Plot the density of IRES counts per distance to orf
+fig4d <- ggplot(ires_orf_dist, 
+       aes(x = -distance_to_orf,  # Flip the x-axis by negating the values
+           color = type)) +
+  geom_density(linewidth = .5) +
+  geom_rug(sides = "b", 
+           alpha = 0.2, 
+           length = unit(0.03, "npc")) +
+  scale_y_continuous(labels = function(x) paste0(x*100)) +
+  scale_x_continuous(breaks = c(0, -500, -1000, -1500, -2000, -2500, -3000),
+                     labels = c("ORF start", "-500", "-1000", "-1500", "-2000", -2500, -3000)) +
+  scale_color_bmj() +
+  labs(x = "Distance to ORF (bp)",
+       y = "Density (%)",
+       color = NULL) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "top",
+        legend.title = element_text(size = 7),
+        legend.text = element_text(size = 7),
+        legend.key.size = unit(0.5, "lines"))
+```
+
+
+```{r Figs}
+# Create final figures.
+
+fig1 <- ggarrange(
+  fig1a, 
+  ggarrange(fig1b, fig1c, 
+            ncol = 2, 
+            labels = c("B", "C"),
+            font.label = list(size = 10, 
+                              face = "bold")),
+  labels = c("A", ""),
+  nrow = 2,
+  heights = c(1, 1),
+  font.label = list(size = 10, 
+                    face = "bold")
+)
+ggsave(
+  "~/Documents/Projects/Ouroseq/Publication/Draft_001/Fig1.pdf",
+  plot = fig1,
+  width = 8.5,
+  height = 4,
+  units = "in",
+  dpi = 300
+)
+
+fig2 <- ggarrange(
+  fig2a, fig2b, fig2c, fig2d,
+  labels = c("A", "B", "C", "D"),
+  nrow = 2,
+  ncol = 2,
+  heights = c(1, 1),
+  font.label = list(size = 10, 
+                    face = "bold")
+)
+ggsave(
+  "~/Documents/Projects/Ouroseq/Publication/Draft_001/Fig2.pdf",
+  plot = fig2,
+  width = 6.5,
+  height = 6,
+  units = "in",
+  dpi = 300
+)
+
+fig3 <- ggarrange(
+  fig3a, 
+  ggarrange(fig3b, fig3c,
+            ncol = 2, 
+            labels = c("B", "C"),
+            font.label = list(size = 10, 
+                              face = "bold")),
+  ggarrange(fig3d, fig3e,
+            ncol = 2, 
+            labels = c("D", "E"),
+            font.label = list(size = 10, 
+                              face = "bold")),
+  labels = c("A", "", ""),
+  nrow = 3,
+  heights = c(1, 1, 1),
+  font.label = list(size = 10, 
+                    face = "bold")
+)
+ggsave(
+  "~/Documents/Projects/Ouroseq/Publication/Draft_001/Fig3.pdf",
+  plot = fig3,
+  width = 7,
+  height = 9,
+  units = "in",
+  dpi = 300
+)
+
+fig4 <- ggarrange(
+  ggarrange(fig4a, fig4b,
+            ncol = 2, 
+            labels = c("A", "B"),
+            font.label = list(size = 10, 
+                              face = "bold")),
+  ggarrange(fig4c, fig4d, 
+            ncol = 2, 
+            labels = c("C", "D"),
+            font.label = list(size = 10, 
+                              face = "bold")),
+  nrow = 2,
+  heights = c(1, 1)
+)
+ggsave(
+  "~/Documents/Ouroseq/Publication/Draft_002/Fig4.pdf",
+  plot = fig4,
+  width = 8.5,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+```
+
+```{r test_expr}
+# Calculate TPM for each circ_id within each lib_name
+circRNADf$rpk <- circRNADf$count / (circRNADf$circ_len / 1000)  # Reads per kilobase
+
+# Calculate scaling factor for each lib_name
+scale_factors <- circRNADf %>%
+  group_by(lib_name) %>%
+  summarize(total_rpk = sum(rpk), .groups = 'drop') %>%
+  mutate(scaling_factor = total_rpk / 1e6)
+
+# Merge scaling factors back
+circRNADf <- merge(circRNADf, scale_factors, by = "lib_name")
+
+# Calculate TPM
+circRNADf$tpm <- circRNADf$rpk / circRNADf$scaling_factor
+
+# Calculate mean TPM per circ_id by lib_prep
+mean_tpm <- circRNADf %>%
+  group_by(circ_id, lib_prep) %>%
+  summarize(mean_tpm = mean(tpm), .groups = 'drop')
+
+# Pivot to wide format for correlation
+tpm_wide <- mean_tpm %>%
+  pivot_wider(names_from = lib_prep, values_from = mean_tpm)
+
+# Filter for circ_ids present in both methods (using base R to handle special column names)
+tpm_shared <- tpm_wide[!is.na(tpm_wide$`Ouro-prep`) & !is.na(tpm_wide$`SQK-PCB-114`), ]
+# Rename using base R
+colnames(tpm_shared)[colnames(tpm_shared) == "Ouro-prep"] <- "ouro_tpm"
+colnames(tpm_shared)[colnames(tpm_shared) == "SQK-PCB-114"] <- "sqk_tpm"
+
+# Calculate aggregated correlation (Spearman for small sample size)
+cor_aggregated_pearson <- cor(log10(tpm_shared$ouro_tpm + 1), 
+                              log10(tpm_shared$sqk_tpm + 1))
+cor_aggregated_spearman <- cor(log10(tpm_shared$ouro_tpm + 1), 
+                               log10(tpm_shared$sqk_tpm + 1), 
+                               method = "spearman")
+
+cat("Number of shared circRNAs:", nrow(tpm_shared), "\n")
+cat("Aggregated Pearson correlation:", round(cor_aggregated_pearson, 3), "\n")
+cat("Aggregated Spearman correlation:", round(cor_aggregated_spearman, 3), "\n")
+
+# Create aggregated scatter plot
+p_agg <- ggplot(tpm_shared, 
+       aes(x = log10(sqk_tpm + 1), 
+           y = log10(ouro_tpm + 1))) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_abline(intercept = 0, slope = 1, 
+              linetype = "dashed", 
+              color = "red", 
+              linewidth = 0.5) +
+  annotate("text", 
+           x = min(log10(tpm_shared$sqk_tpm + 1)) + 
+               0.9 * diff(range(log10(tpm_shared$sqk_tpm + 1))),
+           y = min(log10(tpm_shared$ouro_tpm + 1)) + 
+               0.1 * diff(range(log10(tpm_shared$ouro_tpm + 1))),
+           label = paste0("r = ", round(cor_aggregated_pearson, 3), 
+                         " (Pearson)\n", "ρ = ", round(cor_aggregated_spearman, 3), 
+                         " (Spearman)"),
+           size = 2.5, hjust = 1) +
+  labs(x = "SQK-PCB-114 TPM (log10)",
+       y = "Ouro-prep TPM (log10)",
+       title = "Aggregated correlation") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        plot.title = element_text(size = 8, face = "bold"))
+
+print(p_agg)
+
+# Now do stratified analysis by sample_type
+# Get sample_type information for each circ_id
+circ_sample_type <- circRNADf %>%
+  distinct(circ_id, sample_type) %>%
+  # Handle cases where circ_id appears in multiple sample types
+  group_by(circ_id) %>%
+  summarize(sample_type = paste(sort(unique(sample_type)), collapse = ";"))
+
+# For stratified analysis, we need TPM by circ_id, lib_prep, AND sample_type
+mean_tpm_strat <- circRNADf %>%
+  group_by(circ_id, lib_prep, sample_type) %>%
+  summarize(mean_tpm = mean(tpm), .groups = 'drop') %>%
+  pivot_wider(names_from = lib_prep, values_from = mean_tpm)
+# Filter and rename using base R
+mean_tpm_strat <- mean_tpm_strat[!is.na(mean_tpm_strat$`Ouro-prep`) & !is.na(mean_tpm_strat$`SQK-PCB-114`), ]
+colnames(mean_tpm_strat)[colnames(mean_tpm_strat) == "Ouro-prep"] <- "ouro_tpm"
+colnames(mean_tpm_strat)[colnames(mean_tpm_strat) == "SQK-PCB-114"] <- "sqk_tpm"
+
+# Calculate correlations by sample_type (both Pearson and Spearman)
+cor_strat <- mean_tpm_strat %>%
+  group_by(sample_type) %>%
+  summarize(
+    corr_pearson = cor(log10(ouro_tpm + 1), log10(sqk_tpm + 1)),
+    corr_spearman = cor(log10(ouro_tpm + 1), log10(sqk_tpm + 1), method = "spearman"),
+    n = n(),
+    .groups = 'drop'
+  )
+
+# Create stratified scatter plot
+p_strat <- ggplot(mean_tpm_strat,
+       aes(x = log10(sqk_tpm + 1), 
+           y = log10(ouro_tpm + 1))) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  geom_abline(intercept = 0, slope = 1, 
+              linetype = "dashed", 
+              color = "red", 
+              linewidth = 0.5) +
+  geom_text(data = cor_strat,
+           aes(x = Inf, y = -Inf, 
+               label = paste0("r = ", round(corr_pearson, 3), 
+                             "\nρ = ", round(corr_spearman, 3),
+                             "\nn = ", n)),
+           hjust = 1.1, vjust = -0.5,
+           size = 2) +
+  facet_wrap(~ factor(sample_type,
+                      levels = c("Cervico-vaginal_swab", "Full-void_urine", "Plasma"),
+                      labels = c("CVS", "Urine", "Plasma"))) +
+  labs(x = "SQK-PCB-114 TPM (log10)",
+       y = "Ouro-prep TPM (log10)",
+       title = "Stratified by sample type") +
+  theme_classic() +
+  theme(axis.text = element_text(size = 6),
+        axis.title = element_text(size = 7),
+        plot.title = element_text(size = 8, face = "bold"),
+        strip.text = element_text(size = 6),
+        strip.background = element_blank())
+
+print(p_strat)
+```

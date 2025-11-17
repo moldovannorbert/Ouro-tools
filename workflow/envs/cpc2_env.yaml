@@ -1,0 +1,12 @@
+name: cpc2
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.9
+  - libsvm
+  - biopython
+  - pandas
+  - numpy
+  - tqdm

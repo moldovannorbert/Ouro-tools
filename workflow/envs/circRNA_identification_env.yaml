@@ -1,0 +1,9 @@
+name: circRNA_identification
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.7
+  - pip
+  - pip:
+    - CIRI-long==1.1.0

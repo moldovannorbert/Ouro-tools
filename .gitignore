@@ -1,0 +1,31 @@
+# Credits to Joakim Elofsson, Stack Exchange
+
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!*.smk
+!*.py
+!*.pl
+!*.md
+!*.sh
+!*.R
+!*.Rmd
+!*.sbatch
+!*.yaml
+!*.yml
+!*.csv
+!*.fa
+!*.txt
+!*.sizes
+!*.bedGraph
+!LICENSE
+
+# ...even if they are in subdirectories
+!*/
+
+# ...but ignore in .snakemake/ and conda/
+*.snakemake/
+*conda/
+.Rproj.user
