@@ -90,59 +90,70 @@ circRNA_type_by_group <- circRNADf %>%
   # Remove empty rows
   filter(sample_type != "" & !is.na(circ_type) & lib_prep != "")
 
-# Read circAtlas3
+# Match detected circRNAs to CircAtlas3 and exoRBase (both hg38, half-open)
+match_db_ids <- function(query, db, wiggle = 5) {
+  ids <- rep(NA_character_, nrow(query))
+  for (i in seq_len(nrow(query))) {
+    potential_matches <- which(
+      db$chromosome == query$chr[i] & db$strand == query$strand[i]
+    )
+    if (length(potential_matches) == 0) next
+    start_matches <- abs(db$start[potential_matches] - query$start[i]) <= wiggle
+    end_matches <- abs(db$end[potential_matches] - query$end[i]) <= wiggle
+    matches <- potential_matches[start_matches & end_matches]
+    if (length(matches) > 0) {
+      ids[i] <- paste(db$circName[matches], collapse = ";")
+    }
+  }
+  ids
+}
+
 circAtlasDf <- read.table("~/Documents/Ouroseq/CircAtlas3/human_bed_v3.0.bed",
                           sep = "\t",
                           header = FALSE)
-
 colnames(circAtlasDf) <- c("chromosome", "start", "end", "circName", "x", "strand")
 
-# Define wiggle parameter for coordinate matching
-wiggle <- 5  # Can be adjusted as needed
+exoRBaseRaw <- read.delim("~/Documents/Ouroseq/exoRBase/circRNAs_anno.txt",
+                          header = TRUE,
+                          check.names = FALSE)
+pos_split <- strsplit(as.character(exoRBaseRaw[["Genomic position"]]), ":|-")
+exoRBaseDf <- data.frame(
+  chromosome = vapply(pos_split, `[`, character(1), 1),
+  start = as.integer(vapply(pos_split, `[`, character(1), 2)),
+  end = as.integer(vapply(pos_split, `[`, character(1), 3)),
+  circName = exoRBaseRaw$circID,
+  strand = exoRBaseRaw$Strand,
+  stringsAsFactors = FALSE
+)
 
-# Get unique circRNAs from circRNADf for circAtlas matching
+wiggle <- 5
+
 unique_circRNAs <- circRNADf %>%
   distinct(circ_id, chr, start, end, strand, circ_type, lib_prep, .keep_all = TRUE)
 
-# Create a new column to store circAtlas IDs
-unique_circRNAs$circAtlas_id <- NA
+unique_circRNAs$circAtlas_id <- match_db_ids(unique_circRNAs, circAtlasDf, wiggle)
+unique_circRNAs$exoRBase_id <- match_db_ids(unique_circRNAs, exoRBaseDf, wiggle)
+unique_circRNAs$match_source <- dplyr::case_when(
+  !is.na(unique_circRNAs$circAtlas_id) & !is.na(unique_circRNAs$exoRBase_id) ~ "both",
+  !is.na(unique_circRNAs$circAtlas_id) ~ "CircAtlas",
+  !is.na(unique_circRNAs$exoRBase_id) ~ "exoRBase 2.0",
+  TRUE ~ "novel"
+)
 
-# Use a more efficient approach with vectorized operations
-for (i in 1:nrow(unique_circRNAs)) {
-  # Filter potential matches by chromosome and strand first
-  chr_matches <- circAtlasDf$chromosome == unique_circRNAs$chr[i]
-  strand_matches <- circAtlasDf$strand == unique_circRNAs$strand[i]
-  
-  # Only proceed if there are potential matches
-  if (any(chr_matches & strand_matches)) {
-    # Get indices of chromosome and strand matches
-    potential_matches <- which(chr_matches & strand_matches)
-    
-    # Get coordinates
-    start1 <- unique_circRNAs$start[i]
-    end1 <- unique_circRNAs$end[i]
-    
-    # Check if both start and end coordinates match within wiggle range
-    start_matches <- abs(circAtlasDf$start[potential_matches] - start1) <= wiggle
-    end_matches <- abs(circAtlasDf$end[potential_matches] - end1) <= wiggle
-    
-    # Find actual matches where both start and end coordinates match
-    matches <- potential_matches[start_matches & end_matches]
-    
-    if (length(matches) > 0) {
-      # If multiple matches, concatenate all circAtlas IDs
-      unique_circRNAs$circAtlas_id[i] <- paste(circAtlasDf$circName[matches], collapse = ";")
-    }
-  }
-}
+n_circAtlas <- sum(!is.na(unique_circRNAs$circAtlas_id))
+n_exoRBase <- sum(!is.na(unique_circRNAs$exoRBase_id))
+cat("CircAtlas matches:", n_circAtlas, "\n")
+cat("exoRBase 2.0 matches:", n_exoRBase, "\n")
+# Regression gate: prior CircAtlas-only run on this master had ~160 matches
+stopifnot(n_circAtlas >= 150, n_circAtlas <= 170)
 
-write.table(unique_circRNAs, 
-            file = paste0(projPath, "/InCircAtlas.tsv"), 
-            sep = "\t", 
+write.table(unique_circRNAs,
+            file = paste0(projPath, "/InDatabases.tsv"),
+            sep = "\t",
             row.names = FALSE,
             quote = FALSE)
 
-# Create a list of circ_ids for each sample type, lib_prep, and circAtlas
+# Create a list of circ_ids for each sample type, lib_prep, and databases
 sample_type_circs <- circRNADf %>%
   mutate(
     sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
@@ -155,7 +166,6 @@ sample_type_circs <- circRNADf %>%
     .groups = 'drop'
   )
 
-# Add circAtlas to the list
 circAtlas_circs <- unique_circRNAs %>%
   filter(!is.na(circAtlas_id)) %>%
   group_by(lib_prep) %>%
@@ -165,39 +175,45 @@ circAtlas_circs <- unique_circRNAs %>%
     .groups = 'drop'
   )
 
-sample_type_circs <- bind_rows(sample_type_circs, circAtlas_circs)
+exoRBase_circs <- unique_circRNAs %>%
+  filter(!is.na(exoRBase_id)) %>%
+  group_by(lib_prep) %>%
+  summarise(
+    sample_type = "exoRBase 2.0",
+    circ_ids = list(unique(circ_id)),
+    .groups = 'drop'
+  )
+
+sample_type_circs <- bind_rows(sample_type_circs, circAtlas_circs, exoRBase_circs)
 
 # Create overlap matrix for each lib_prep
 lib_preps <- unique(sample_type_circs$lib_prep)
 overlap_matrices <- list()
 
 for (prep in lib_preps) {
-  # Get sample types for this lib_prep
   prep_sample_types <- unique(sample_type_circs$sample_type[sample_type_circs$lib_prep == prep])
-  
-  # Create matrix for this lib_prep
+
   prep_matrix <- matrix(0, nrow = length(prep_sample_types), ncol = length(prep_sample_types))
   rownames(prep_matrix) <- prep_sample_types
   colnames(prep_matrix) <- prep_sample_types
-  
-  # Fill the matrix with overlap counts
+
   for (i in 1:length(prep_sample_types)) {
     for (j in 1:length(prep_sample_types)) {
-      if (i <= j) {  # Only fill upper triangle to avoid duplicates
-        circs_i <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[i] & 
+      if (i <= j) {
+        circs_i <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[i] &
                                              sample_type_circs$lib_prep == prep][[1]]
-        circs_j <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[j] & 
+        circs_j <- sample_type_circs$circ_ids[sample_type_circs$sample_type == prep_sample_types[j] &
                                              sample_type_circs$lib_prep == prep][[1]]
         prep_matrix[i, j] <- length(intersect(circs_i, circs_j))
-        prep_matrix[j, i] <- prep_matrix[i, j]  # Make matrix symmetric
+        prep_matrix[j, i] <- prep_matrix[i, j]
       }
     }
   }
-  
+
   overlap_matrices[[prep]] <- prep_matrix
 }
 
-# Add circAtlas overlap information to circRNA_type_by_group
+# Add database overlap information to circRNA_type_by_group
 circRNA_type_by_group <- circRNA_type_by_group %>%
   bind_rows(
     unique_circRNAs %>%
@@ -207,60 +223,64 @@ circRNA_type_by_group <- circRNA_type_by_group %>%
         sample_type = "CircAtlas",
         unique_circs = n_distinct(circ_id),
         .groups = 'drop'
+      ),
+    unique_circRNAs %>%
+      filter(!is.na(exoRBase_id)) %>%
+      group_by(circ_type, lib_prep) %>%
+      summarise(
+        sample_type = "exoRBase 2.0",
+        unique_circs = n_distinct(circ_id),
+        .groups = 'drop'
       )
   )
 
-# Print results
-print("Unique circRNAs by sample type, circ type, and lib_prep (including CircAtlas):")
+print("Unique circRNAs by sample type, circ type, and lib_prep (including CircAtlas and exoRBase):")
 print(circRNA_type_by_group)
 
-print("\nOverlap matrices between sample types and CircAtlas for each lib_prep:")
+print("\nOverlap matrices between sample types and databases for each lib_prep:")
 for (prep in names(overlap_matrices)) {
   cat("\nOverlap matrix for", prep, ":\n")
   print(overlap_matrices[[prep]])
 }
 
-# Count circRNAs with and without circAtlas matches
-circAtlas_overlap_summary <- circRNADf %>%
-  # Join with unique_circRNAs to get circAtlas_id information
+# Provenance counts by match_source
+match_source_summary <- unique_circRNAs %>%
+  distinct(circ_id, .keep_all = TRUE) %>%
+  count(match_source, name = "n_circs")
+print("Database match_source summary (unique circ_ids):")
+print(match_source_summary)
+
+# Overlap with databases by sample_type, grouped by match_source
+db_overlap_summary <- circRNADf %>%
   left_join(
-    unique_circRNAs %>% select(circ_id, circAtlas_id),
+    unique_circRNAs %>% distinct(circ_id, .keep_all = TRUE) %>%
+      select(circ_id, circAtlas_id, exoRBase_id, match_source),
     by = "circ_id"
   ) %>%
-  mutate(
-    has_circAtlas_match = !is.na(circAtlas_id)
-  ) %>%
-  group_by(sample_type) %>%
+  group_by(sample_type, match_source) %>%
   summarise(
-    total_circs = n_distinct(circ_id),  # Count unique circRNAs
-    circs_in_circAtlas = n_distinct(circ_id[has_circAtlas_match]),  # Count unique circRNAs in circAtlas
-    circs_not_in_circAtlas = n_distinct(circ_id[!has_circAtlas_match]),  # Count unique circRNAs not in circAtlas
-    percent_in_circAtlas = round(100 * n_distinct(circ_id[has_circAtlas_match]) / n_distinct(circ_id), 2),
+    n_circs = n_distinct(circ_id),
     .groups = 'drop'
   ) %>%
   filter(sample_type != "")
 
-# Print the summary
-print("CircAtlas overlap summary:")
-print(circAtlas_overlap_summary)
+print("Database overlap summary by sample_type and match_source:")
+print(db_overlap_summary)
 
-# Summarize circRNA types with circAtlas overlap information
-circRNA_type_with_atlas <- circRNADf %>%
-  # Join with unique_circRNAs to get circAtlas_id information
+# CircRNA types grouped by match_source
+circRNA_type_with_db <- circRNADf %>%
   left_join(
-    unique_circRNAs %>% select(circ_id, circAtlas_id),
+    unique_circRNAs %>% distinct(circ_id, .keep_all = TRUE) %>%
+      select(circ_id, match_source),
     by = "circ_id"
   ) %>%
-  # Standardize the order of semicolon-separated values
   mutate(
     sample_type = sapply(strsplit(sample_type, ";"), function(x) paste(sort(unique(x)), collapse=";")),
-    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";")),
-    has_circAtlas_match = !is.na(circAtlas_id)
+    lib_prep = sapply(strsplit(lib_prep, ";"), function(x) paste(sort(unique(x)), collapse=";"))
   ) %>%
-  # Group by the standardized strings, lib_prep, and circAtlas match status
-  group_by(sample_type, lib_prep, has_circAtlas_match) %>%
+  group_by(sample_type, lib_prep, match_source) %>%
   summarise(
-    total_circs = n_distinct(circ_id),  # Count unique circRNAs
+    total_circs = n_distinct(circ_id),
     exonic = n_distinct(circ_id[circ_type == "exon"]),
     intronic = n_distinct(circ_id[circ_type == "intron"]),
     intergenic = n_distinct(circ_id[circ_type == "intergenic"]),
@@ -273,12 +293,10 @@ circRNA_type_with_atlas <- circRNADf %>%
     unknown_pct = round(100 * n_distinct(circ_id[circ_type == "Unknown"]) / n_distinct(circ_id), 2),
     .groups = 'drop'
   ) %>%
-  # Remove empty rows
   filter(sample_type != "" & lib_prep != "")
 
-# Print the summary
-print("CircRNA types with circAtlas overlap information (by lib_prep):")
-print(circRNA_type_with_atlas)
+print("CircRNA types by match_source (by lib_prep):")
+print(circRNA_type_with_db)
 
 # Calculate overlaps between lib_preps
 lib_prep_overlaps <- circRNADf %>%

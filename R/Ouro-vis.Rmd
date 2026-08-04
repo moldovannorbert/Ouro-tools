@@ -58,13 +58,13 @@ cpc2Df <- cpc2Df[cpc2Df$circ_id %in% circRNADf$circ_id,]
 
 ```{r Fig1A, fig.cap=fc1}
 # Create a figure object that can be used later as a panel in Fig1
-fig1a <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig1A.pdf",
+fig1a <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Ouroseq/Publication/Fig_parts/Fig1A.pdf",
                                                  density = 300))
 ```
 
 ```{r Fig1B, fig.cap=fc1}
 # Create a figure object that can be used later as a panel in Fig1
-fig1b <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig1B.pdf",
+fig1b <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Ouroseq/Publication/Fig_parts/Fig1B.pdf",
                                                  density = 300))
 ```
 
@@ -350,9 +350,300 @@ fig2d <- ggplot(aggregated_data,
 
 
 ```{r Fig3A, fig.cap=fc3}
-# Create a figure object that can be used later as a panel in Fig1
-fig3a <- grid::rasterGrob(magick::image_read_pdf("~/Documents/Projects/Ouroseq/Publication/Fig_parts/Fig3A.pdf",
-                                                 density = 300))
+# Database support + sample-set overlaps (replaces Euler diagram once exoRBase is included)
+match_source_levels <- c("both", "CircAtlas", "exoRBase", "novel")
+match_source_labels <- c("CircAtlas3 + exoRBase 2.0", "CircAtlas3 only",
+                         "exoRBase 2.0 only", "Novel")
+match_source_colors <- c(
+  "both" = "#3C5488",
+  "CircAtlas" = "#4DBBD5",
+  "exoRBase" = "#00A087",
+  "novel" = "#E64B35"
+)
+set_levels <- c("CVS", "Urine", "Plasma", "LRDO")
+
+# Prefer InDatabases.tsv from Ouro-stat; otherwise reuse CircAtlas IDs and match exoRBase
+db_path <- paste0(projPath, "/InDatabases.tsv")
+if (file.exists(db_path)) {
+  db_ann <- read.delim(db_path, header = TRUE, stringsAsFactors = FALSE) %>%
+    distinct(circ_id, .keep_all = TRUE) %>%
+    mutate(
+      circAtlas_id = ifelse(circAtlas_id %in% c("", "NA"), NA, circAtlas_id),
+      exoRBase_id = ifelse(exoRBase_id %in% c("", "NA"), NA, exoRBase_id),
+      match_source = dplyr::case_when(
+        !is.na(circAtlas_id) & !is.na(exoRBase_id) ~ "both",
+        !is.na(circAtlas_id) ~ "CircAtlas",
+        !is.na(exoRBase_id) ~ "exoRBase",
+        TRUE ~ "novel"
+      )
+    ) %>%
+    select(circ_id, match_source)
+} else {
+  atlas_ann <- read.delim(paste0(projPath, "/InCircAtlas.tsv"),
+                          header = TRUE, stringsAsFactors = FALSE) %>%
+    distinct(circ_id, .keep_all = TRUE) %>%
+    mutate(circAtlas_id = ifelse(circAtlas_id %in% c("", "NA"), NA, circAtlas_id)) %>%
+    select(circ_id, circAtlas_id)
+
+  match_db_ids_vis <- function(query, db, wiggle = 5) {
+    ids <- rep(NA_character_, nrow(query))
+    for (i in seq_len(nrow(query))) {
+      potential_matches <- which(
+        db$chromosome == query$chr[i] & db$strand == query$strand[i]
+      )
+      if (length(potential_matches) == 0) next
+      start_matches <- abs(db$start[potential_matches] - query$start[i]) <= wiggle
+      end_matches <- abs(db$end[potential_matches] - query$end[i]) <= wiggle
+      matches <- potential_matches[start_matches & end_matches]
+      if (length(matches) > 0) {
+        ids[i] <- paste(db$circName[matches], collapse = ";")
+      }
+    }
+    ids
+  }
+
+  exo_raw <- read.delim("~/Documents/Ouroseq/exoRBase/circRNAs_anno.txt",
+                        header = TRUE, check.names = FALSE)
+  pos_split <- strsplit(as.character(exo_raw[["Genomic position"]]), ":|-")
+  exo_df <- data.frame(
+    chromosome = vapply(pos_split, `[`, character(1), 1),
+    start = as.integer(vapply(pos_split, `[`, character(1), 2)),
+    end = as.integer(vapply(pos_split, `[`, character(1), 3)),
+    circName = exo_raw$circID,
+    strand = exo_raw$Strand,
+    stringsAsFactors = FALSE
+  )
+  uniq_coords <- circRNADf %>% distinct(circ_id, chr, start, end, strand)
+  uniq_coords$exoRBase_id <- match_db_ids_vis(uniq_coords, exo_df, 5)
+
+  db_ann <- uniq_coords %>%
+    select(circ_id, exoRBase_id) %>%
+    left_join(atlas_ann, by = "circ_id") %>%
+    mutate(
+      match_source = dplyr::case_when(
+        !is.na(circAtlas_id) & !is.na(exoRBase_id) ~ "both",
+        !is.na(circAtlas_id) ~ "CircAtlas",
+        !is.na(exoRBase_id) ~ "exoRBase",
+        TRUE ~ "novel"
+      )
+    ) %>%
+    select(circ_id, match_source)
+}
+
+circ_sets <- circRNADf %>%
+  mutate(
+    sample_type = strsplit(as.character(sample_type), ";"),
+    lib_prep = strsplit(as.character(lib_prep), ";")
+  ) %>%
+  tidyr::unnest(c(sample_type, lib_prep)) %>%
+  filter(sample_type != "", lib_prep != "") %>%
+  left_join(db_ann, by = "circ_id") %>%
+  mutate(match_source = tidyr::replace_na(match_source, "novel"))
+
+set_membership <- bind_rows(
+  circ_sets %>%
+    filter(lib_prep == "Ouro-prep", sample_type == "Cervico-vaginal_swab") %>%
+    distinct(circ_id, match_source) %>%
+    mutate(set = "CVS"),
+  circ_sets %>%
+    filter(lib_prep == "Ouro-prep", sample_type == "Full-void_urine") %>%
+    distinct(circ_id, match_source) %>%
+    mutate(set = "Urine"),
+  circ_sets %>%
+    filter(lib_prep == "Ouro-prep", sample_type == "Plasma") %>%
+    distinct(circ_id, match_source) %>%
+    mutate(set = "Plasma"),
+  circ_sets %>%
+    filter(lib_prep == "SQK-PCB-114") %>%
+    distinct(circ_id, match_source) %>%
+    mutate(set = "LRDO")
+) %>%
+  mutate(
+    set = factor(set, levels = set_levels),
+    match_source = factor(match_source, levels = match_source_levels,
+                          labels = match_source_labels)
+  )
+
+# UpSet-style intersections with broken y-axis (0-150 shown; 150-1000 omitted)
+set_wide <- set_membership %>%
+  mutate(present = TRUE) %>%
+  select(circ_id, match_source, set, present) %>%
+  tidyr::pivot_wider(names_from = set, values_from = present, values_fill = FALSE)
+
+set_wide$combo <- apply(set_wide[set_levels], 1, function(r) {
+  paste(set_levels[as.logical(r)], collapse = "&")
+})
+
+inter_df <- set_wide %>%
+  filter(combo != "") %>%
+  count(combo, match_source, name = "n") %>%
+  group_by(combo) %>%
+  mutate(combo_total = sum(n)) %>%
+  ungroup() %>%
+  mutate(combo = reorder(combo, -combo_total))
+
+combo_levels <- levels(inter_df$combo)
+# Show 0-200 expanded; omit 200-1000; resume above 1000
+break_low <- 200
+break_high <- 1000
+gap <- 11 * 1.1
+# Compress the post-break range so 0-200 dominates the panel height
+upper_scale <- 0.3
+
+# Stack segments in data coordinates (known at bottom, novel on top)
+seg_df <- inter_df %>%
+  arrange(combo, match_source) %>%
+  group_by(combo) %>%
+  mutate(
+    ymax = cumsum(n),
+    ymin = ymax - n
+  ) %>%
+  ungroup() %>%
+  mutate(
+    combo = factor(combo, levels = combo_levels),
+    x = as.numeric(combo)
+  )
+
+# Display coordinates: keep <=200; map values >=1000 into a compressed upper band
+break_map <- function(y, break_low, break_high, gap, upper_scale) {
+  ifelse(y <= break_low,
+         y,
+         break_low + gap + (y - break_high) * upper_scale)
+}
+
+# Keep lower (<=200) and upper (>=1000) pieces; drop the omitted mid-range
+split_seg <- function(ymin, ymax, fill, x, break_low, break_high, gap, upper_scale) {
+  parts <- list()
+  if (ymin < break_low) {
+    parts[[length(parts) + 1]] <- data.frame(
+      ymin = ymin,
+      ymax = min(ymax, break_low),
+      fill = fill,
+      x = x
+    )
+  }
+  if (ymax > break_high) {
+    parts[[length(parts) + 1]] <- data.frame(
+      ymin = break_low + gap + (max(ymin, break_high) - break_high) * upper_scale,
+      ymax = break_low + gap + (ymax - break_high) * upper_scale,
+      fill = fill,
+      x = x
+    )
+  }
+  if (length(parts) == 0) {
+    return(data.frame(ymin = numeric(), ymax = numeric(),
+                      fill = character(), x = numeric()))
+  }
+  do.call(rbind, parts)
+}
+
+rect_df <- do.call(rbind, lapply(seq_len(nrow(seg_df)), function(i) {
+  split_seg(seg_df$ymin[i], seg_df$ymax[i],
+            as.character(seg_df$match_source[i]),
+            seg_df$x[i], break_low, break_high, gap, upper_scale)
+}))
+rect_df$fill <- factor(rect_df$fill, levels = match_source_labels)
+
+total_df <- inter_df %>%
+  distinct(combo, combo_total) %>%
+  mutate(
+    combo = factor(combo, levels = combo_levels),
+    x = as.numeric(combo),
+    y = dplyr::case_when(
+      combo_total <= break_low ~ as.numeric(combo_total),
+      combo_total < break_high ~ break_low,  # clipped mid-range bars (e.g. Plasma)
+      TRUE ~ break_map(combo_total, break_low, break_high, gap, upper_scale)
+    )
+  )
+
+y_breaks <- c(
+  seq(0, 200, by = 50),
+  break_map(seq(1000, 1200, by = 100),
+            break_low, break_high, gap, upper_scale)
+)
+y_labels <- c(seq(0, 200, by = 50), seq(1000, 1200, by = 100))
+bar_w <- 0.7
+y_top <- max(total_df$y) * 1.1
+
+# Interrupted y-axis at panel left edge (same place as tick marks)
+y_npc <- function(y) y / y_top
+gap_lo <- y_npc(break_low)
+gap_hi <- y_npc(break_low + gap)
+axis_break_grob <- grid::grobTree(
+  grid::segmentsGrob(0, 0, 0, gap_lo, default.units = "npc",
+                     gp = grid::gpar(lwd = 1.5, lineend = "butt")),
+  grid::segmentsGrob(0, gap_hi, 0, 1, default.units = "npc",
+                     gp = grid::gpar(lwd = 1.5, lineend = "butt"))
+)
+
+fig3a_upset_bars <- ggplot() +
+  geom_rect(data = rect_df,
+            aes(xmin = x - bar_w / 2, xmax = x + bar_w / 2,
+                ymin = ymin, ymax = ymax, fill = fill),
+            color = NA) +
+  # White band for the omitted mid-range (splits tall bars)
+  annotate("rect",
+           xmin = -Inf, xmax = Inf,
+           ymin = break_low, ymax = break_low + gap,
+           fill = "white", color = NA) +
+  annotation_custom(axis_break_grob) +
+  geom_text(data = total_df,
+            aes(x = x, y = y, label = combo_total),
+            vjust = -0.35, size = 2) +
+  scale_x_continuous(breaks = seq_along(combo_levels),
+                     labels = combo_levels,
+                     limits = c(0.05, length(combo_levels) + 0.6),
+                     expand = c(0, 0)) +
+  scale_y_continuous(breaks = y_breaks,
+                     labels = y_labels,
+                     expand = expansion(mult = c(0, 0))) +
+  scale_fill_manual(values = setNames(match_source_colors, match_source_labels),
+                    drop = FALSE) +
+  coord_cartesian(ylim = c(0, y_top), clip = "off") +
+  labs(x = NULL, y = "Unique circRNA count", fill = NULL) +
+  theme_classic() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.line.y = element_blank(),
+        axis.ticks.y = element_line(linewidth = 0.4),
+        axis.ticks.length.y = unit(2, "pt"),
+        axis.text.y = element_text(size = 7),
+        axis.title = element_text(size = 7),
+        legend.position = "top",
+        legend.text = element_text(size = 6),
+        legend.key.size = unit(0.5, "lines"),
+        plot.margin = margin(5.5, 5.5, 5.5, 10)) +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+
+matrix_df <- data.frame(combo = combo_levels, stringsAsFactors = FALSE) %>%
+  tidyr::crossing(set = factor(set_levels, levels = rev(set_levels))) %>%
+  mutate(
+    combo = factor(combo, levels = combo_levels),
+    x = as.numeric(combo),
+    on = mapply(function(c, s) grepl(paste0("(^|&)", s, "(&|$)"), c),
+                as.character(combo), as.character(set))
+  )
+
+fig3a_upset_matrix <- ggplot(matrix_df,
+       aes(x = x, y = set)) +
+  geom_line(aes(group = combo),
+            data = matrix_df %>% filter(on),
+            color = "grey70", linewidth = 0.4) +
+  geom_point(aes(color = on), size = 1.6) +
+  scale_x_continuous(breaks = seq_along(combo_levels),
+                     limits = c(0.05, length(combo_levels) + 0.6),
+                     expand = c(0, 0)) +
+  scale_color_manual(values = c("FALSE" = "grey85", "TRUE" = "black"),
+                     guide = "none") +
+  labs(x = NULL, y = NULL) +
+  theme_classic() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 7),
+        axis.line.x = element_blank())
+
+fig3a <- ggarrange(fig3a_upset_bars, fig3a_upset_matrix,
+                   nrow = 2, heights = c(2.8, 0.75), align = "v")
 ```
 
 ```{r Fig3B, fig.cap=fc3}
@@ -703,7 +994,7 @@ fig1 <- ggarrange(
                     face = "bold")
 )
 ggsave(
-  "~/Documents/Projects/Ouroseq/Publication/Draft_001/Fig1.pdf",
+  "~/Documents/Ouroseq/Publication/Draft_002/Fig1.pdf",
   plot = fig1,
   width = 8.5,
   height = 4,
@@ -730,28 +1021,18 @@ ggsave(
 )
 
 fig3 <- ggarrange(
-  fig3a, 
-  ggarrange(fig3b, fig3c,
-            ncol = 2, 
-            labels = c("B", "C"),
-            font.label = list(size = 10, 
-                              face = "bold")),
-  ggarrange(fig3d, fig3e,
-            ncol = 2, 
-            labels = c("D", "E"),
-            font.label = list(size = 10, 
-                              face = "bold")),
-  labels = c("A", "", ""),
-  nrow = 3,
-  heights = c(1, 1, 1),
-  font.label = list(size = 10, 
+  fig3a, fig3b, fig3c, fig3d,
+  labels = c("A", "B", "C", "D"),
+  nrow = 2,
+  ncol = 2,
+  font.label = list(size = 10,
                     face = "bold")
 )
 ggsave(
-  "~/Documents/Projects/Ouroseq/Publication/Draft_001/Fig3.pdf",
+  "~/Documents/Ouroseq/Publication/Draft_002/Fig3.pdf",
   plot = fig3,
   width = 7,
-  height = 9,
+  height = 7,
   units = "in",
   dpi = 300
 )
